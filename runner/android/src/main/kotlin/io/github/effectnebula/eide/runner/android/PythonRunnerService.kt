@@ -45,6 +45,9 @@ class PythonRunnerService : Service() {
         var exitCode = -1
         try {
             val request = readStartRequest(FileInputStream(channel.fileDescriptor))
+            // Отдаём свой pid сразу: пока программа не запущена, останавливать
+            // нечего, а как только запустится — читать канал будет уже некому.
+            writer.write(MessageType.Started, startedPayload())
             exitCode = runScript(request, writer)
         } catch (t: Throwable) {
             Log.e(TAG, "раннер упал", t)
@@ -118,6 +121,9 @@ class PythonRunnerService : Service() {
         thread.start()
         return thread
     }
+
+    private fun startedPayload(): ByteArray =
+        JSONObject().put("pid", Process.myPid()).toString().toByteArray(Charsets.UTF_8)
 
     private fun exitPayload(code: Int): ByteArray =
         JSONObject().put("code", code).toString().toByteArray(Charsets.UTF_8)

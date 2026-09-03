@@ -10,6 +10,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ProtocolTest {
 
@@ -61,6 +62,18 @@ class ProtocolTest {
 
         val unknownType = byteArrayOf(0, 0, 0, 0, 0x63)
         assertFailsWith<ProtocolException> { Wire.read(ByteArrayInputStream(unknownType)) }
+    }
+
+    @Test
+    fun `коды типов не пересекаются и держатся в одном байте`() {
+        // Тип едет одним байтом заголовка: пересечение кодов или выход за 0xFF
+        // означает молча перепутанные сообщения, а не ошибку компиляции.
+        val codes = MessageType.entries.map { it.code }
+        assertEquals(codes.size, codes.toSet().size, "коды типов должны быть уникальны")
+        assertTrue(codes.all { it in 1..0xFF }, "код типа должен помещаться в байт")
+        for (type in MessageType.entries) {
+            assertEquals(type, MessageType.fromCode(type.code), "разбор кода ${type.code}")
+        }
     }
 
     @Test

@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,13 +34,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
+import io.github.effectnebula.eide.runner.android.KillReason
+import io.github.effectnebula.eide.runner.android.RunLimits
 import java.io.File
 
 /**
- * Прототип P1: доказать, что официальный CPython запускается в отдельном процессе
- * и его вывод доходит до UI по нашему протоколу.
+ * Прототипы P1 и P4 в одном экране.
  *
- * Это не редактор. Ввод здесь на BasicTextField намеренно — своё ядро отрисовки
+ * P1: официальный CPython запускается в отдельном процессе, и его вывод доходит
+ * до UI по нашему протоколу.
+ * P4: зависшую программу можно остановить, а сторожевые таймеры по времени и
+ * памяти срабатывают сами.
+ *
+ * Это не редактор. Ввод на BasicTextField намеренно — своё ядро отрисовки
  * появится на этапе 1, и подменять его заглушкой раньше времени незачем.
  */
 class MainActivity : ComponentActivity() {
@@ -56,53 +63,113 @@ private val Border = Color(0xFF393B40)
 private val TextColor = Color(0xFFBCBEC4)
 private val TextDim = Color(0xFF6F737A)
 private val Accent = Color(0xFF3574F0)
-
-private const val SAMPLE = """import sys, platform
-
-print("Python", sys.version.split()[0], "на", platform.machine())
-for i in range(5):
-    print("шаг", i)
-print("готово")
-"""
+private val Danger = Color(0xFFDB5C5C)
 
 private val mainHandler = Handler(Looper.getMainLooper())
+
+private class Sample(val title: String, val code: String)
+
+private val SAMPLES = listOf(
+    Sample(
+        "привет",
+        """
+        import sys, platform
+
+        print("Python", sys.version.split()[0], "на", platform.machine())
+        for i in range(5):
+            print("шаг", i)
+        print("готово")
+        """.trimIndent(),
+    ),
+    Sample(
+        "вечный цикл",
+        """
+        print("вошёл в бесконечный цикл, останови меня")
+        while True:
+            pass
+        """.trimIndent(),
+    ),
+    Sample(
+        "ест память",
+        """
+        print("ем память мегабайтами")
+        blocks = []
+        while True:
+            blocks.append(bytearray(1024 * 1024))
+        """.trimIndent(),
+    ),
+    Sample(
+        "ошибка",
+        """
+        print("сейчас будет исключение")
+        1 / 0
+        """.trimIndent(),
+    ),
+)
+
+// Пределы для прототипа нарочно маленькие: ждать полминуты, чтобы убедиться,
+// что сторож работает, — плохой способ проверять сторожа.
+private val PROTOTYPE_LIMITS = RunLimits(
+    timeoutMillis = 10_000,
+    maxResidentBytes = 256L * 1024 * 1024,
+)
 
 @Composable
 private fun PrototypeScreen() {
     val context = LocalContext.current
-    var source by remember { mutableStateOf(SAMPLE) }
+    var source by remember { mutableStateOf(SAMPLES.first().code) }
     var output by remember { mutableStateOf("") }
-    var running by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("готов") }
+    var handle by remember { mutableStateOf<AndroidPythonBackend.Handle?>(null) }
 
-    fun append(text: String) {
-        output += text
+    fun onMain(action: () -> Unit) {
+        mainHandler.post(action)
     }
 
     fun run() {
-        running = true
         output = ""
+        status = "запускаю…"
 
         val projectDir = File(context.filesDir, "projects/demo").apply { mkdirs() }
         val script = File(projectDir, "main.py").apply { writeText(source) }
+        val startedAt = System.currentTimeMillis()
 
-        AndroidPythonBackend(context).run(
+        handle = AndroidPythonBackend(context).run(
             script = script,
             workDir = projectDir,
+            limits = PROTOTYPE_LIMITS,
             listener = object : AndroidPythonBackend.Listener {
-                override fun onStdout(chunk: String) = post { append(chunk) }
-                override fun onStderr(chunk: String) = post { append(chunk) }
-                override fun onExit(code: Int) = post {
-                    append("\n[процесс завершился с кодом $code]\n")
-                    running = false
-                }
-                override fun onFailure(error: Throwable) = post {
-                    append("\n[сбой канала: $error]\n")
-                    running = false
+                override fun onStarted(pid: Int) = onMain {
+                    status = "работает, процесс $pid"
                 }
 
-                // Не Context.getMainExecutor: он появился в API 28, а minSdk у нас 27.
-                private fun post(action: () -> Unit) {
-                    mainHandler.post(action)
+                override fun onStdout(chunk: String) = onMain { output += chunk }
+
+                override fun onStderr(chunk: String) = onMain { output += chunk }
+
+                override fun onExit(code: Int) = onMain {
+                    val ms = System.currentTimeMillis() - startedAt
+                    output += "\n[завершилась с кодом $code за $ms мс]\n"
+                    status = "готов"
+                    handle = null
+                }
+
+                override fun onKilled(reason: KillReason) = onMain {
+                    val ms = System.currentTimeMillis() - startedAt
+                    val why = when (reason) {
+                        KillReason.ByUser -> "остановлена вручную"
+                        KillReason.Timeout -> "снята по таймауту"
+                        KillReason.Memory -> "снята по пределу памяти"
+                    }
+                    output += "\n[$why через $ms мс]\n"
+                    status = "готов"
+                    handle = null
+                }
+
+                override fun onFailure(error: Throwable) = onMain {
+                    output += "\n[сбой канала: $error]\n"
+                    status = "готов"
+                    handle = null
                 }
             },
         )
@@ -114,14 +181,36 @@ private fun PrototypeScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            BasicText(text = "Effect IDE · прототип P1", color = TextColor, size = 14)
+            Label("Effect IDE · прототипы P1 и P4", TextColor, 14)
+
+            val running = handle != null
             Box(
                 Modifier
-                    .background(if (running) Border else Accent)
+                    .background(if (running) Danger else Accent)
+                    .clickable { if (running) handle?.stop() else run() }
                     .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .then(if (running) Modifier else Modifier.clickableOnce { run() })
             ) {
-                BasicText(text = if (running) "выполняется…" else "Run", color = Color.White, size = 13)
+                Label(if (running) "Stop" else "Run", Color.White, 13)
+            }
+        }
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Panel)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            for (sample in SAMPLES) {
+                Box(
+                    Modifier
+                        .background(Border)
+                        .clickable { source = sample.code }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Label(sample.title, TextColor, 12)
+                }
             }
         }
 
@@ -133,7 +222,16 @@ private fun PrototypeScreen() {
             cursorBrush = SolidColor(Accent),
         )
 
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+        Row(
+            Modifier.fillMaxWidth().background(Border).padding(horizontal = 12.dp, vertical = 4.dp),
+        ) {
+            Label(
+                "$status · предел ${PROTOTYPE_LIMITS.timeoutMillis} мс и " +
+                    "${PROTOTYPE_LIMITS.maxResidentBytes?.div(1024 * 1024)} МБ",
+                TextDim,
+                11,
+            )
+        }
 
         Column(
             Modifier
@@ -143,7 +241,7 @@ private fun PrototypeScreen() {
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp)
         ) {
-            BasicText(
+            Label(
                 text = output.ifEmpty { "вывод программы появится здесь" },
                 color = if (output.isEmpty()) TextDim else TextColor,
                 size = 13,
@@ -154,7 +252,7 @@ private fun PrototypeScreen() {
 }
 
 @Composable
-private fun BasicText(text: String, color: Color, size: Int, mono: Boolean = false) {
+private fun Label(text: String, color: Color, size: Int, mono: Boolean = false) {
     androidx.compose.foundation.text.BasicText(
         text = text,
         style = TextStyle(
@@ -164,6 +262,3 @@ private fun BasicText(text: String, color: Color, size: Int, mono: Boolean = fal
         ),
     )
 }
-
-/** Клик без material: нам нужен только обработчик, а не тема с ripple. */
-private fun Modifier.clickableOnce(onClick: () -> Unit): Modifier = this.clickable(onClick = onClick)

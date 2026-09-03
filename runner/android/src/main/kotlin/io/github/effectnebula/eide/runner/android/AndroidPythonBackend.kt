@@ -3,30 +3,39 @@ package io.github.effectnebula.eide.runner.android
 import android.content.Context
 import android.content.Intent
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import io.github.effectnebula.eide.core.exec.MessageType
 import io.github.effectnebula.eide.core.exec.Wire
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 
 /**
  * Клиентская половина: живёт в процессе UI и говорит с раннером по протоколу.
  *
- * Канал — пара сокетов, созданная здесь и переданная в сервис через Intent.
- * Не abstract-namespace unix-сокет и не порт на loopback: и то, и другое на Android
- * видно другим приложениям, а пара дескрипторов через Binder — нет.
+ * Канал — пара сокетов из `ParcelFileDescriptor.createSocketPair()`, переданная
+ * сервису через Intent. Не abstract-namespace unix-сокет и не порт на loopback:
+ * и то, и другое на Android видно другим приложениям, а пара дескрипторов — нет.
  */
 class AndroidPythonBackend(private val context: Context) {
 
     interface Listener {
+        fun onStarted(pid: Int)
         fun onStdout(chunk: String)
         fun onStderr(chunk: String)
         fun onExit(code: Int)
+        fun onKilled(reason: KillReason)
         fun onFailure(error: Throwable)
     }
 
-    fun run(script: File, workDir: File, listener: Listener): Handle {
+    fun run(
+        script: File,
+        workDir: File,
+        limits: RunLimits = RunLimits(),
+        listener: Listener,
+    ): Handle {
         val pair = ParcelFileDescriptor.createSocketPair()
         val mine = pair[0]
         val theirs = pair[1]
@@ -49,19 +58,26 @@ class AndroidPythonBackend(private val context: Context) {
 
         Wire.write(FileOutputStream(mine.fileDescriptor), MessageType.Control, request)
 
-        val thread = Thread({ receive(mine, listener) }, "eide-runner-client")
+        val handle = Handle(mine, limits)
+        val thread = Thread({ receive(mine, handle, listener) }, "eide-runner-client")
         thread.isDaemon = true
         thread.start()
+        handle.attachReader(thread)
 
-        return Handle(mine, thread)
+        return handle
     }
 
-    private fun receive(channel: ParcelFileDescriptor, listener: Listener) {
+    private fun receive(channel: ParcelFileDescriptor, handle: Handle, listener: Listener) {
         try {
             FileInputStream(channel.fileDescriptor).use { input ->
                 while (true) {
                     val message = Wire.read(input) ?: break
                     when (message.type) {
+                        MessageType.Started -> {
+                            val pid = JSONObject(message.payload.toString(Charsets.UTF_8)).getInt("pid")
+                            handle.onStarted(pid)
+                            listener.onStarted(pid)
+                        }
                         MessageType.Stdout -> listener.onStdout(message.payload.toString(Charsets.UTF_8))
                         MessageType.Stderr -> listener.onStderr(message.payload.toString(Charsets.UTF_8))
                         MessageType.Exit -> {
@@ -73,25 +89,94 @@ class AndroidPythonBackend(private val context: Context) {
                     }
                 }
             }
-            // Канал закрылся без кадра Exit — раннер убит снаружи или упал.
-            listener.onExit(EXIT_CHANNEL_CLOSED)
+            // Кадра Exit не было: либо раннер убит нами, либо его убила система.
+            val reason = handle.killReason()
+            if (reason != null) listener.onKilled(reason) else listener.onExit(EXIT_CHANNEL_CLOSED)
         } catch (t: Throwable) {
-            listener.onFailure(t)
+            val reason = handle.killReason()
+            if (reason != null) listener.onKilled(reason) else listener.onFailure(t)
         } finally {
-            runCatching { channel.close() }
+            handle.finish()
         }
     }
 
-    /** Ручка запущенной программы. Закрытие канала — сигнал раннеру, что мы ушли. */
-    class Handle(private val channel: ParcelFileDescriptor, private val reader: Thread) {
-        fun close() {
+    /**
+     * Ручка запущенной программы: остановка и надзор за лимитами.
+     *
+     * Остановка — именно убийство процесса, а не просьба завершиться. Программа,
+     * крутящаяся в `while True`, свой канал не читает, а прервать её изнутри
+     * интерпретатора надёжно нельзя (ADR-002).
+     */
+    class Handle internal constructor(
+        private val channel: ParcelFileDescriptor,
+        private val limits: RunLimits,
+    ) {
+        private val killedFor = AtomicReference<KillReason?>(null)
+        @Volatile private var pid: Int = -1
+        @Volatile private var reader: Thread? = null
+        @Volatile private var watchdog: Thread? = null
+        @Volatile private var finished = false
+
+        internal fun attachReader(thread: Thread) {
+            reader = thread
+        }
+
+        internal fun onStarted(runnerPid: Int) {
+            pid = runnerPid
+            if (limits.timeoutMillis != null || limits.maxResidentBytes != null) {
+                watchdog = Thread({ watch(runnerPid) }, "eide-runner-watchdog").apply {
+                    isDaemon = true
+                    start()
+                }
+            }
+        }
+
+        internal fun killReason(): KillReason? = killedFor.get()
+
+        internal fun finish() {
+            finished = true
             runCatching { channel.close() }
-            reader.interrupt()
+        }
+
+        fun stop() = kill(KillReason.ByUser)
+
+        private fun kill(reason: KillReason) {
+            if (!killedFor.compareAndSet(null, reason)) return
+            val target = pid
+            if (target > 0) {
+                // Процесс того же приложения и того же UID — убить его мы вправе.
+                Process.killProcess(target)
+            }
+            reader?.interrupt()
+        }
+
+        private fun watch(runnerPid: Int) {
+            val deadline = limits.timeoutMillis?.let { System.currentTimeMillis() + it }
+            while (!finished && killedFor.get() == null) {
+                if (deadline != null && System.currentTimeMillis() > deadline) {
+                    kill(KillReason.Timeout)
+                    return
+                }
+                val cap = limits.maxResidentBytes
+                if (cap != null) {
+                    val resident = ProcessStats.residentBytes(runnerPid)
+                        ?: return // процесса уже нет — сторожить нечего
+                    if (resident > cap) {
+                        kill(KillReason.Memory)
+                        return
+                    }
+                }
+                try {
+                    Thread.sleep(limits.pollIntervalMillis)
+                } catch (_: InterruptedException) {
+                    return
+                }
+            }
         }
     }
 
     companion object {
-        /** Раннер исчез, не сообщив код возврата: чаще всего его убила система. */
+        /** Раннер исчез, не сообщив код возврата, и мы его не убивали: постаралась система. */
         const val EXIT_CHANNEL_CLOSED: Int = -2
     }
 }
