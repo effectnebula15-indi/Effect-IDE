@@ -33,6 +33,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.effectnebula.eide.ui.RenderBenchmark
+import io.github.effectnebula.eide.ui.benchmarkDocument
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
 import io.github.effectnebula.eide.runner.android.KillReason
 import io.github.effectnebula.eide.runner.android.RunLimits
@@ -53,7 +55,42 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { PrototypeScreen() }
+        setContent { Prototypes() }
+    }
+}
+
+@Composable
+private fun Prototypes() {
+    var showRenderBenchmark by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize().background(Background)) {
+        Row(
+            Modifier.fillMaxWidth().background(Border).padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Tab("запуск кода · P1 и P4", !showRenderBenchmark) { showRenderBenchmark = false }
+            Tab("отрисовка · P2", showRenderBenchmark) { showRenderBenchmark = true }
+        }
+
+        if (showRenderBenchmark) {
+            // Документ строится один раз: пересборка на каждом кадре испортила бы замер.
+            val document = remember { benchmarkDocument() }
+            RenderBenchmark(document, Modifier.weight(1f))
+        } else {
+            Box(Modifier.weight(1f)) { PrototypeScreen() }
+        }
+    }
+}
+
+@Composable
+private fun Tab(title: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(if (selected) Accent else Panel)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Label(title, if (selected) Color.White else TextDim, 12)
     }
 }
 

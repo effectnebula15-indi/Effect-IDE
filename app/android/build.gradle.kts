@@ -21,6 +21,7 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(project(":runner:android"))
+    implementation(project(":ui"))
 
     implementation(libs.compose.runtime)
     implementation(libs.compose.foundation)

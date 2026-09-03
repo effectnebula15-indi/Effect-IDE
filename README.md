@@ -31,7 +31,10 @@
 ./gradlew build                    # сборка, тесты, lint
 ./gradlew checkArchitecture        # проверка границ между модулями
 ./gradlew :app:desktop:run         # десктопная заглушка
-./gradlew :app:android:assembleDebug   # APK прототипа
+./gradlew :app:android:assembleDebug   # APK прототипов
+
+# замер отрисовки без человека (нужен дисплей или xvfb-run):
+./gradlew :app:desktop:run -Deide.benchmarkSeconds=10
 ```
 
 При первой сборке Android-части качается официальная сборка CPython с python.org

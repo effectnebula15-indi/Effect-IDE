@@ -1,10 +1,11 @@
 // Конвенция для модулей общего UI: Kotlin Multiplatform + Compose.
 //
-// KMP, а не обычный JVM-модуль, потому что сюда позже добавится androidTarget(),
-// и код из commonMain уедет на Android без переписывания (Шаг 3).
+// Android-таргет подключается плагином com.android.kotlin.multiplatform.library:
+// с AGP 9 это штатный способ дать KMP-модулю Android, а не com.android.library.
 
 plugins {
     kotlin("multiplatform")
+    id("com.android.kotlin.multiplatform.library")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.compose")
 }
