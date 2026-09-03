@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  jvm:
-    name: JVM (ядро, протокол, десктоп)
+  build:
+    name: Сборка, тесты, APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -22,15 +22,34 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # Android SDK нужен даже для десктопных задач: без него AGP не сконфигурирует
+      # проект целиком, а модули Android входят в тот же билд.
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Пакеты SDK и NDK
+        run: |
+          sdkmanager "platforms;android-37.2" "build-tools;36.0.0" "ndk;29.0.14206865"
+
       - name: Gradle
         uses: gradle/actions/setup-gradle@v5
 
-      - name: Сборка, тесты и проверка границ модулей
+      - name: Сборка, тесты, lint и проверка границ модулей
         run: ./gradlew build checkArchitecture --stacktrace
 
-      - name: Отчёты тестов
+      - name: APK для проверки на устройстве
+        if: success()
+        uses: actions/upload-artifact@v5
+        with:
+          name: effect-ide-debug-apk
+          path: app/android/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Отчёты при падении
         if: failure()
         uses: actions/upload-artifact@v5
         with:
-          name: test-reports
-          path: "**/build/reports/tests/**"
+          name: reports
+          path: |
+            **/build/reports/tests/**
+            **/build/reports/lint-results-*.html

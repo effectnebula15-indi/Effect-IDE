@@ -24,3 +24,7 @@ include(":platform:desktop")
 include(":runner")
 include(":ui")
 include(":app:desktop")
+
+// Android появляется после десктопа: правило «сначала то, что видно сразу».
+include(":runner:android")
+include(":app:android")

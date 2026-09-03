@@ -7,6 +7,14 @@ serialization = "1.11.0"
 jgit = "7.7.1.202607240634-r"
 junit = "6.1.3"
 
+# Официальная сборка CPython под Android с python.org (ADR-003).
+# sha256 пинится: пакет качается на сборке, и подмена не должна проходить молча.
+python = "3.14.7"
+pythonAndroidSha256 = "6d50cc3aa66e414a439594089bcdfb5f1264358155c70c1f00471c24cfb477fb"
+
+androidxActivityCompose = "1.13.0"
+androidxCore = "1.19.0"
+
 # Android
 minSdk = "27"        # android.os.SharedMemory требует API 27 (ADR-004)
 compileSdk = "36"
@@ -23,6 +31,9 @@ jgit = { module = "org.eclipse.jgit:org.eclipse.jgit", version.ref = "jgit" }
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "composeMultiplatform" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
+
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit" }
 

@@ -18,9 +18,12 @@ tasks.register("checkArchitecture") {
         ":platform:desktop" to setOf(":platform:api"),
         ":platform:android" to setOf(":platform:api"),
         ":runner" to setOf(":core", ":platform:api"),
+        ":runner:android" to setOf(":core", ":platform:api"),
         ":ui" to setOf(":core", ":platform:api"),
         ":app:desktop" to setOf(":core", ":platform:api", ":platform:desktop", ":ui", ":runner"),
-        ":app:android" to setOf(":core", ":platform:api", ":platform:android", ":ui", ":runner"),
+        ":app:android" to setOf(
+            ":core", ":platform:api", ":platform:android", ":ui", ":runner", ":runner:android",
+        ),
     )
 
     // Проверка текстовая: ищем project(":...") в build-файлах модулей.

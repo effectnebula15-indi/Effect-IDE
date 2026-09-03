@@ -11,6 +11,7 @@ local.properties
 
 # Native
 native/**/build/
+.cxx/
 *.o
 *.so
 *.dylib
