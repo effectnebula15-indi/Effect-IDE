@@ -79,21 +79,27 @@ class EditTransaction(replacements: List<Replacement>) {
     /**
      * Переносит офсет из «до правки» в «после правки».
      *
-     * Офсет внутри заменённого участка схлопывается к его началу: где именно
-     * внутри удалённого текста стоял курсор, после удаления смысла не имеет.
+     * Офсет внутри заменённого участка уезжает за вставленный текст, а не к началу
+     * замены. Это не косметика: после набора символа курсор обязан оказаться
+     * ПОСЛЕ него, иначе каждая нажатая клавиша будет отталкивать курсор назад.
+     * По той же причине вставка ровно в позицию офсета сдвигает его вправо.
+     *
+     * Для чистого удаления обе трактовки совпадают: вставленного текста нет,
+     * и офсет встаёт на начало удалённого участка.
      */
     fun mapOffset(offset: Int): Int {
-        var result = offset
+        var shift = 0
         for (replacement in replacements) {
-            if (replacement.start >= offset) break
-            result += if (replacement.end <= offset) {
-                replacement.lengthDelta
+            if (replacement.start > offset) break
+            if (replacement.end <= offset) {
+                shift += replacement.lengthDelta
             } else {
-                // Офсет попал внутрь замены.
-                replacement.start + replacement.text.length - offset
+                // Офсет попал внутрь замены: дальше замен, влияющих на него, нет —
+                // они отсортированы и не пересекаются.
+                return replacement.start + shift + replacement.text.length
             }
         }
-        return result
+        return offset + shift
     }
 
     companion object {
