@@ -22,3 +22,7 @@ native/**/build/
 
 # Локальные настройки Claude Code (машинозависимые)
 .claude/settings.local.json
+
+# Логи падений JVM
+hs_err_pid*.log
+replay_pid*.log
