@@ -5,8 +5,9 @@
 Это единственный способ поймать здесь опечатку в сигнатуре или в порядке
 аргументов — на телефоне она выглядит как «просто не рисует».
 
-Путь к libeide_canvas.so берётся из LD_LIBRARY_PATH, как и на устройстве:
-никаких особых крючков в самом шиме ради тестов нет.
+Путь к библиотеке берётся из EIDE_CANVAS_LIB — тем же способом, что и в самом
+шиме. Имя файла на разных системах разное (.so, .dylib), и полагаться на поиск
+по имени значит проверять на macOS не то же, что на Linux.
 """
 
 import ctypes
@@ -19,7 +20,7 @@ CANVAS_H = 48
 
 
 def load_library():
-    lib = ctypes.CDLL("libeide_canvas.so")
+    lib = ctypes.CDLL(os.environ.get("EIDE_CANVAS_LIB", "libeide_canvas.so"))
     lib.ec_area_size.argtypes = [ctypes.c_int32, ctypes.c_int32]
     lib.ec_area_size.restype = ctypes.c_size_t
     lib.ec_init_area.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32, ctypes.c_int32]

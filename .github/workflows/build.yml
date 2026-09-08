@@ -43,6 +43,21 @@ jobs:
       - name: Нативный код под санитайзерами
         run: ./gradlew checkNative --stacktrace
 
+      # Бюджет APK из плана — 60 МБ. Без механической проверки он остаётся
+      # пожеланием: размер растёт по мегабайту за раз и замечается, когда уже
+      # поздно. Отладочная сборка идёт без R8, так что запас реальный.
+      - name: Размер APK
+        run: |
+          apk=$(ls app/android/build/outputs/apk/debug/*.apk)
+          bytes=$(stat -c%s "$apk")
+          limit=$((60 * 1024 * 1024))
+          printf 'APK: %s байт (%.1f МБ), бюджет %d МБ\n' \
+            "$bytes" "$(echo "$bytes / 1048576" | bc -l)" $((limit / 1024 / 1024))
+          if [ "$bytes" -gt "$limit" ]; then
+            echo "::error::APK вырос за бюджет в 60 МБ"
+            exit 1
+          fi
+
       - name: APK для проверки на устройстве
         if: success()
         uses: actions/upload-artifact@v5
@@ -59,3 +74,43 @@ jobs:
           path: |
             **/build/reports/tests/**
             **/build/reports/lint-results-*.html
+
+  # Нативный код обязан собираться не только там, где его писали. Это риск R6
+  # из плана: у заказчика один компьютер, а библиотека нужна под каждую
+  # настольную систему.
+  #
+  # Windows здесь нет намеренно: тесты используют pthreads и POSIX, и под MSVC
+  # их придётся переписывать. Пока это честно не покрыто, а не «наверное,
+  # работает».
+  native-macos:
+    name: Нативный код на macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # cmake напрямую, а не через Gradle: конфигурация проекта целиком требует
+      # Android SDK, а ставить его ради компиляции пятисот строк C — минуты
+      # впустую. Цена — команды продублированы с корневым build.gradle.kts.
+      - name: Кадровый буфер под ASan и UBSan
+        run: |
+          cmake -S native/canvas -B build/canvas-asan \
+            -DEIDE_CANVAS_TESTS=ON -DEIDE_SANITIZER=address,undefined -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/canvas-asan
+          ctest --test-dir build/canvas-asan --output-on-failure
+
+      - name: Кадровый буфер под TSan
+        run: |
+          cmake -S native/canvas -B build/canvas-tsan \
+            -DEIDE_CANVAS_TESTS=ON -DEIDE_SANITIZER=thread -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/canvas-tsan
+          ctest --test-dir build/canvas-tsan --output-on-failure
+
+      - name: Шим на Python против настоящей библиотеки
+        run: |
+          cmake -S native/canvas -B build/canvas-lib -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/canvas-lib
+          # На macOS библиотека называется .dylib, и ctypes ищет её по своим
+          # правилам: подсказываем полным путём.
+          EIDE_CANVAS_LIB="$PWD/build/canvas-lib/libeide_canvas.dylib" \
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 native/canvas/test/test_shim.py

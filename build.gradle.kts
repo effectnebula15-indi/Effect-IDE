@@ -122,7 +122,12 @@ val canvasShim = tasks.register<Exec>("canvasShimTest") {
     // и размеру файла, и правка того же размера в ту же секунду остаётся
     // невидимой. Один раз это уже стоило получаса разбирательств.
     environment("PYTHONDONTWRITEBYTECODE", "1")
-    environment("LD_LIBRARY_PATH", buildDir.get().asFile.absolutePath)
+    // Полным путём, а не через LD_LIBRARY_PATH: имя файла на разных системах
+    // разное, и способ поиска должен быть один и тот же везде.
+    environment(
+        "EIDE_CANVAS_LIB",
+        buildDir.get().asFile.resolve(System.mapLibraryName("eide_canvas")).absolutePath,
+    )
 
     commandLine(
         "sh", "-c",
