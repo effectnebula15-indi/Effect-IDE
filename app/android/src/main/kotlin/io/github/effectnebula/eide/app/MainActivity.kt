@@ -63,6 +63,7 @@ import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
 import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
+import io.github.effectnebula.eide.ui.widgets.NoticeBar
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -211,9 +212,17 @@ private fun WorkbenchScreen(
         File(projectDir, "main.py").apply { if (!exists()) writeText(SAMPLE_PROGRAM) }
     }
 
-    val workspace = remember {
-        Workspace(ProjectTree(projectDir), IcuGraphemeBreaker()).apply { open(scriptFile) }
+    // Открытие завёрнуто намеренно: бросок отсюда пересчитывает remember на
+    // каждой попытке композиции, а композиция после броска повторяется —
+    // приложение зависает молча, без экрана и без сообщения.
+    val startup = remember {
+        val workspace = Workspace(ProjectTree(projectDir), IcuGraphemeBreaker())
+        val failure = runCatching { workspace.open(scriptFile) }
+            .fold({ null }, { "не открылся ${scriptFile.name}: ${it.message}" })
+        workspace to failure
     }
+    val workspace = startup.first
+    var notice by remember { mutableStateOf(startup.second) }
 
     // Workspace — обычный объект, снапшот-система Compose за ним не следит.
     // Счётчик поднимается на каждое открытие, закрытие и переключение: то же
@@ -312,7 +321,10 @@ private fun WorkbenchScreen(
                 // Уходя с файла, дописываем его: секунда автосохранения могла
                 // не наступить, а вернуться человек может нескоро.
                 saveNow()
-                workspace.open(file)
+                // Файл мог исчезнуть между тем, как дерево его показало, и тем,
+                // как по нему постучали пальцем.
+                notice = runCatching { workspace.open(file) }
+                    .fold({ null }, { "не открылся ${file.name}: ${it.message}" })
                 workspaceRevision++
                 onFileOpened()
             },
@@ -354,6 +366,8 @@ private fun WorkbenchScreen(
                 workspaceRevision++
             },
         )
+
+        notice?.let { NoticeBar(it) }
 
         if (showSearch && search != null) {
             SearchBar(

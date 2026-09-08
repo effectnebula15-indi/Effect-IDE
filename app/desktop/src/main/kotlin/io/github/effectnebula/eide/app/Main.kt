@@ -56,6 +56,7 @@ import io.github.effectnebula.eide.ui.run.OutputPanel
 import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
+import io.github.effectnebula.eide.ui.widgets.NoticeBar
 import androidx.compose.runtime.CompositionLocalProvider
 import java.awt.Rectangle
 import java.awt.Robot
@@ -153,16 +154,9 @@ private fun DesktopShell() {
     val canvas = remember { runCatching { DesktopCanvasArea.create() }.getOrNull() }
     DisposableEffect(canvas) { onDispose { canvas?.close() } }
 
-    val workspace = remember {
-        // -Deide.project=/путь открывает чужую папку; по умолчанию — та, из
-        // которой запущено приложение.
-        val root = Debug.project ?: System.getProperty("user.dir")
-        Workspace(ProjectTree(File(root)), JdkGraphemeBreaker()).apply {
-            // -Deide.open=путь открывает файл на старте. Нужно для самоснимка:
-            // иначе увидеть редактор с вкладками можно только руками.
-            Debug.open?.let { open(File(root, it)) }
-        }
-    }
+    val startup = remember { startWorkspace() }
+    val workspace = startup.workspace
+    var notice by remember { mutableStateOf(startup.failure) }
     var revision by remember { mutableStateOf(0) }
     @Suppress("UNUSED_EXPRESSION")
     revision
@@ -227,7 +221,11 @@ private fun DesktopShell() {
                     selected = active?.file,
                     onOpen = { file ->
                         workspace.saveModified()
-                        workspace.open(file)
+                        // Файл мог исчезнуть между тем, как дерево его показало,
+                        // и тем, как по нему щёлкнули. Исключение отсюда уходит
+                        // в обработчик события Compose и роняет приложение.
+                        notice = runCatching { workspace.open(file) }
+                            .fold({ null }, { "не открылся ${file.name}: ${it.message}" })
                         revision++
                     },
                 )
@@ -241,6 +239,8 @@ private fun DesktopShell() {
                     onClose = { workspace.saveModified(); workspace.close(it.file); revision++ },
                 )
 
+                notice?.let { NoticeBar(it) }
+
                 RunPanel(
                     workspace = workspace,
                     active = active,
@@ -251,6 +251,46 @@ private fun DesktopShell() {
             }
         }
     }
+}
+
+/** Что получилось поднять на старте: проект и, если не вышло, причина. */
+private class Startup(val workspace: Workspace, val failure: String?)
+
+/**
+ * Поднимает проект и открывает файл из `-Deide.open`, если он задан.
+ *
+ * Исключение отсюда стоило бы дорого: `remember` пересчитывается на каждой
+ * попытке композиции, а композиция после броска повторяется — приложение
+ * зависает молча, без окна и без сообщения. Диагностировать это по симптому
+ * «gradle run не завершается» — час работы, так что причина ловится здесь.
+ */
+private fun startWorkspace(): Startup {
+    // -Deide.project=/путь открывает чужую папку; по умолчанию — та, из
+    // которой запущено приложение.
+    val root = File(Debug.project ?: System.getProperty("user.dir"))
+    val workspace = Workspace(ProjectTree(root), JdkGraphemeBreaker())
+
+    // -Deide.open=путь открывает файл на старте. Нужно для самоснимка:
+    // иначе увидеть редактор с вкладками можно только руками.
+    val argument = Debug.open ?: return Startup(workspace, null)
+    val target = openTarget(root, argument)
+
+    return runCatching { workspace.open(target) }.fold(
+        { Startup(workspace, null) },
+        { Startup(workspace, "не открылся ${target.path}: ${it.message}") },
+    )
+}
+
+/**
+ * Куда показывает `-Deide.open`.
+ *
+ * Абсолютный путь остаётся собой: `File(root, absolute)` в Java склеивает их
+ * в бессмыслицу вроде `/проект/tmp/файл.py`, и файл «не находится» по пути,
+ * который в командной строке написан верно.
+ */
+internal fun openTarget(root: File, argument: String): File {
+    val given = File(argument)
+    return if (given.isAbsolute) given else File(root, argument)
 }
 
 /**
