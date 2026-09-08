@@ -40,6 +40,7 @@ import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
 import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.syntax.Highlighters
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
 import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
@@ -373,7 +374,12 @@ private fun RunPanel(
         }
 
         if (active != null) {
-            EditorScreen(active.state, Modifier.weight(1f), search = search)
+            EditorScreen(
+                active.state,
+                Modifier.weight(1f),
+                search = search,
+                highlighter = Highlighters.forFile(active.name),
+            )
         } else {
             Box(Modifier.weight(1f).padding(16.dp)) {
                 BasicText(

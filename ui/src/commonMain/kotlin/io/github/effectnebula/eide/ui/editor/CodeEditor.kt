@@ -28,9 +28,12 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
@@ -38,6 +41,8 @@ import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.syntax.LineHighlighter
+import io.github.effectnebula.eide.core.syntax.TokenKind
 import io.github.effectnebula.eide.core.text.Rope
 import io.github.effectnebula.eide.ui.theme.Eide
 import kotlin.math.max
@@ -57,6 +62,8 @@ data class EditorColors(
     val caret: Color,
     /** Подсветка совпадений поиска. Под выделением, поэтому заметно бледнее. */
     val searchMatch: Color,
+    /** Цвета подсветки синтаксиса по видам кусков. */
+    val syntax: Map<TokenKind, Color> = emptyMap(),
 )
 
 /**
@@ -76,13 +83,17 @@ fun CodeEditor(
     modifier: Modifier = Modifier,
     fontSizeSp: Float = 13f,
     search: SearchSession? = null,
+    highlighter: LineHighlighter = LineHighlighter.None,
 ) {
     val measurer = rememberTextMeasurer()
     val font = Eide.editorFont
-    val style = remember(fontSizeSp, font) {
-        TextStyle(fontSize = fontSizeSp.sp, fontFamily = font)
+    // Цвет в базовом стиле, а не в drawText: куски подсветки перекрывают его
+    // выборочно, а перекрытие сверху покрасило бы строку целиком.
+    val style = remember(fontSizeSp, font, colors.text) {
+        TextStyle(fontSize = fontSizeSp.sp, fontFamily = font, color = colors.text)
     }
     val cache = remember { LineLayoutCache<TextLayoutResult>() }
+    val lineStates = remember(highlighter) { LineStates(highlighter) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -173,6 +184,8 @@ fun CodeEditor(
                 scrollPx = scrollPx,
                 caretVisible = caretVisible,
                 search = search,
+                highlighter = highlighter,
+                lineStates = lineStates,
             )
         }
     }
@@ -218,6 +231,8 @@ private fun DrawScope.drawEditor(
     scrollPx: Float,
     caretVisible: Boolean,
     search: SearchSession?,
+    highlighter: LineHighlighter,
+    lineStates: LineStates,
 ) {
     val text = state.text
     if (metrics.height <= 0f) return
@@ -247,7 +262,19 @@ private fun DrawScope.drawEditor(
             val lineStart = text.lineStart(line)
             val lineEnd = text.lineEnd(line)
             val lineText = text.substring(lineStart, lineEnd)
-            val layout = cache.get(lineText) { measurer.measure(it, style, constraints = constraints) }
+
+            // Состояние входит в ключ кэша: строка внутри докстринга и такая же
+            // снаружи выглядят одинаково, а красятся по-разному.
+            val stateBefore = lineStates.stateBefore(state.document, line)
+            val key = if (stateBefore == 0) lineText else "$stateBefore\u0000$lineText"
+
+            val layout = cache.get(key) {
+                measurer.measure(
+                    highlighted(lineText, stateBefore, highlighter, colors),
+                    style,
+                    constraints = constraints,
+                )
+            }
 
             for (match in matches) {
                 drawRange(
@@ -268,7 +295,9 @@ private fun DrawScope.drawEditor(
                 topLeft = Offset(gutterWidth - numberLayout.size.width - metrics.digitWidth, top),
             )
 
-            drawText(layout, color = colors.text, topLeft = Offset(gutterWidth, top))
+            // Без color: цвета берутся из кусков разметки, а перекрытие сверху
+            // покрасило бы всю строку одинаково.
+            drawText(layout, topLeft = Offset(gutterWidth, top))
 
             if (caretVisible) {
                 drawCarets(state, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
@@ -352,6 +381,34 @@ private fun DrawScope.drawCarets(
             topLeft = Offset(x, top),
             size = Size(CARET_WIDTH_PX, metrics.height),
         )
+    }
+}
+
+/**
+ * Строка с расставленными цветами.
+ *
+ * `AnnotatedString` строится только при промахе кэша разметки: на попадании
+ * ничего не считается вообще, а попаданий при прокрутке около 98% (P2).
+ */
+private fun highlighted(
+    line: String,
+    stateBefore: Int,
+    highlighter: LineHighlighter,
+    colors: EditorColors,
+): AnnotatedString {
+    val spans = highlighter.highlight(line, stateBefore).spans
+    if (spans.isEmpty()) return AnnotatedString(line)
+
+    return buildAnnotatedString {
+        append(line)
+        for (span in spans) {
+            val color = colors.syntax[span.kind] ?: continue
+            addStyle(
+                SpanStyle(color = color),
+                span.start.coerceIn(0, line.length),
+                span.end.coerceIn(0, line.length),
+            )
+        }
     }
 }
 

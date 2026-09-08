@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.syntax.LineHighlighter
+import io.github.effectnebula.eide.core.syntax.TokenKind
 import io.github.effectnebula.eide.ui.editor.CodeEditor
 import io.github.effectnebula.eide.ui.editor.EditorColors
 import io.github.effectnebula.eide.ui.editor.observeEditor
@@ -33,6 +35,7 @@ fun EditorScreen(
     state: EditorState,
     modifier: Modifier = Modifier,
     search: SearchSession? = null,
+    highlighter: LineHighlighter = LineHighlighter.None,
 ) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
@@ -40,6 +43,7 @@ fun EditorScreen(
             colors = editorColors(),
             modifier = Modifier.fillMaxWidth().weight(1f),
             search = search,
+            highlighter = highlighter,
         )
 
         StatusBar(state)
@@ -88,6 +92,13 @@ fun editorColors(): EditorColors = EditorColors(
     // Бледнее выделения: подсветка совпадений лежит под ним, и выделенное
     // совпадение должно оставаться отличимым от остальных.
     searchMatch = Eide.colors.selection.copy(alpha = 0.35f),
+    syntax = mapOf(
+        TokenKind.Keyword to Eide.colors.syntaxKeyword,
+        TokenKind.String to Eide.colors.syntaxString,
+        TokenKind.Number to Eide.colors.syntaxNumber,
+        TokenKind.Comment to Eide.colors.syntaxComment,
+        TokenKind.Declaration to Eide.colors.syntaxFunction,
+    ),
 )
 
 @Composable

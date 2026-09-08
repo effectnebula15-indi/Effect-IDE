@@ -45,6 +45,7 @@ import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunSpec
 import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.syntax.Highlighters
 import io.github.effectnebula.eide.core.project.OpenFile
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
@@ -364,7 +365,11 @@ private fun WorkbenchScreen(
 
         Box(Modifier.fillMaxWidth().weight(1f)) {
             if (active != null) {
-                EditorScreen(active.state, search = search)
+                EditorScreen(
+                    active.state,
+                    search = search,
+                    highlighter = Highlighters.forFile(active.name),
+                )
             } else {
                 Label("откройте файл во вкладке «проект»", TextDim, 13)
             }
