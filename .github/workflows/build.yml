@@ -37,6 +37,12 @@ jobs:
       - name: Сборка, тесты, lint и проверка границ модулей
         run: ./gradlew build checkArchitecture --stacktrace
 
+      # Отдельным шагом: нативный код гоняется под санитайзерами на хосте, а не
+      # только едет в APK. Ошибки в нём не воспроизводятся по требованию, и
+      # ловить их на телефоне — самый дорогой способ.
+      - name: Нативный код под санитайзерами
+        run: ./gradlew checkNative --stacktrace
+
       - name: APK для проверки на устройстве
         if: success()
         uses: actions/upload-artifact@v5

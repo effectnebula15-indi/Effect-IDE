@@ -64,9 +64,57 @@ tasks.register("checkArchitecture") {
     }
 }
 
+// --- Нативный код: сборка и проверка на хосте ------------------------------
+//
+// Кадровый буфер графики (native/canvas) — это C, работающий в двух процессах
+// сразу. Ошибки такого кода не воспроизводятся по требованию, поэтому он
+// собирается на хосте под санитайзерами и гоняется в CI, а не только едет в
+// APK через NDK.
+//
+// ASan и TSan в одной сборке несовместимы — отсюда две задачи, а не одна.
+
+val canvasDir = layout.projectDirectory.dir("native/canvas")
+
+fun registerCanvasTest(name: String, sanitizer: String, description: String) =
+    tasks.register<Exec>(name) {
+        group = "verification"
+        this.description = description
+
+        val buildDir = layout.buildDirectory.dir("native-canvas/$name")
+        inputs.dir(canvasDir)
+        outputs.dir(buildDir)
+
+        // Одной командой, чтобы не плодить задачи под configure и build:
+        // проект крошечный, и полная пересборка занимает секунды.
+        commandLine(
+            "sh", "-c",
+            "cmake -S ${canvasDir.asFile} -B ${buildDir.get().asFile} " +
+                "-DEIDE_CANVAS_TESTS=ON -DEIDE_SANITIZER=$sanitizer -DCMAKE_BUILD_TYPE=Debug && " +
+                "cmake --build ${buildDir.get().asFile} && " +
+                "ctest --test-dir ${buildDir.get().asFile} --output-on-failure"
+        )
+    }
+
+val canvasAsan = registerCanvasTest(
+    "canvasTestAsan", "address,undefined",
+    "Кадровый буфер под AddressSanitizer и UndefinedBehaviorSanitizer.",
+)
+
+val canvasTsan = registerCanvasTest(
+    "canvasTestTsan", "thread",
+    "Кадровый буфер под ThreadSanitizer: писатель и читатель в двух потоках.",
+)
+
+tasks.register("checkNative") {
+    group = "verification"
+    description = "Все проверки нативного кода."
+    dependsOn(canvasAsan, canvasTsan)
+}
+
 tasks.register("check") {
     group = "verification"
     dependsOn("checkArchitecture")
+    dependsOn("checkNative")
     // :platform и :app — контейнеры без своего build-файла, у них нет задачи check.
     dependsOn(subprojects.filter { it.buildFile.exists() }.map { "${it.path}:check" })
 }
