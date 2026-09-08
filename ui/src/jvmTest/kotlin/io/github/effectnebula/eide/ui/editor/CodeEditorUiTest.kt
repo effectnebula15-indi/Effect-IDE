@@ -4,17 +4,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.MouseInjectionScope
 import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.text.Document
 import io.github.effectnebula.eide.core.text.Rope
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -88,6 +95,57 @@ class CodeEditorUiTest {
         assertTrue(after > before, "после сдвига вправо под тем же местом должен лежать текст дальше по строке: $before → $after")
     }
 
+    /**
+     * Тычок прямо в знак обязан поставить курсор в этот знак.
+     *
+     * Проверяется на строке с табуляцией и с иероглифом: оба шире цифры, и
+     * арифметика «колонка равна x делить на ширину цифры» на них разъезжается.
+     * Куда тыкать, спрашивается у самой разметки — иначе тест проверял бы шрифт.
+     */
+    @Test
+    fun `a tap lands on the character it points at`() = runComposeUiTest {
+        val line = "a\tbc\u4e2d\u6587de"
+        val state = editor(line)
+        var probe: TapProbe? = null
+
+        setContent {
+            val measurer = rememberTextMeasurer()
+            // Тот же шрифт, каким рисует редактор: LocalEditorFont по умолчанию
+            // моноширинный, и мерить прицел другим шрифтом бессмысленно.
+            val style = TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+            probe = remember {
+                val sample = measurer.measure("0", style)
+                TapProbe(
+                    layout = measurer.measure(line, style, softWrap = false),
+                    gutter = gutterWidthPx(
+                        state.text.lineCount,
+                        LineMetrics(sample.size.height.toFloat(), sample.size.width.toFloat()),
+                    ),
+                )
+            }
+            CodeEditor(state, colors, Modifier.size(400.dp, 200.dp), fontSizeSp = 13f)
+        }
+        waitForIdle()
+
+        val measured = probe ?: error("разметка не получена")
+
+        // Курсор встаёт между знаками, поэтому проверяются четверти, а не середина:
+        // тычок в левую четверть знака ставит курсор перед ним, в правую — после.
+        // Середина знака — ровно та точка, где ответ по определению неоднозначен.
+        for (index in line.indices) {
+            val left = measured.layout.getHorizontalPosition(index, usePrimaryDirection = true)
+            val right = measured.layout.getHorizontalPosition(index + 1, usePrimaryDirection = true)
+
+            onRoot().performMouseInput { clickAt(Offset(measured.gutter + left + (right - left) / 4f, 5f)) }
+            waitForIdle()
+            assertEquals(index, state.carets.primary.head, "тычок в левую четверть знака $index")
+
+            onRoot().performMouseInput { clickAt(Offset(measured.gutter + right - (right - left) / 4f, 5f)) }
+            waitForIdle()
+            assertEquals(index + 1, state.carets.primary.head, "тычок в правую четверть знака $index")
+        }
+    }
+
     @Test
     fun `sideways scrolling stops at the end of the longest line`() = runComposeUiTest {
         // Без ограничения текст уезжает в пустоту и найти его обратно нечем.
@@ -153,3 +211,6 @@ private fun MouseInjectionScope.clickAt(position: Offset) {
     press()
     release()
 }
+
+/** Разметка строки и ширина гаттера — всё, что нужно, чтобы прицелиться. */
+private class TapProbe(val layout: TextLayoutResult, val gutter: Float)

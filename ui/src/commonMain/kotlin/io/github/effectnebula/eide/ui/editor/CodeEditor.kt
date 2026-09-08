@@ -113,6 +113,32 @@ fun CodeEditor(
         )
     }
 
+    // Разметка строки в одном месте на всех потребителей: рисование, попадание
+    // тапа и прокрутка за курсором обязаны видеть строку одинаково. Пока это
+    // были две арифметики — по разметке при рисовании и по ширине цифры при
+    // тапе, — курсор на строке с иероглифом вставал не туда, куда ткнули.
+    val lineLayout: (Int) -> TextLayoutResult = { line ->
+        val text = state.text
+        val lineText = text.substring(text.lineStart(line), text.lineEnd(line))
+        // Состояние входит в ключ кэша: строка внутри докстринга и такая же
+        // снаружи выглядят одинаково, а красятся по-разному.
+        val stateBefore = lineStates.stateBefore(state.document, line)
+        val key = if (stateBefore == 0) lineText else "$stateBefore\u0000$lineText"
+        cache.get(key) {
+            // Без переноса и без ограничения ширины. Перенос сломал бы всю
+            // арифметику: высота строки здесь постоянная, и перенесённый хвост
+            // рисовался бы поверх следующей строки. Цена — разметка строки
+            // целиком, какой бы длинной она ни была; на файле из одной строки
+            // в мегабайт это будет заметно.
+            measurer.measure(
+                highlighted(lineText, stateBefore, highlighter, colors),
+                style,
+                softWrap = false,
+                constraints = Constraints(),
+            )
+        }
+    }
+
     var scrollPx by remember { mutableFloatStateOf(0f) }
     var scrollXPx by remember { mutableFloatStateOf(0f) }
     var viewportHeight by remember { mutableIntStateOf(0) }
@@ -160,8 +186,9 @@ fun CodeEditor(
         snapshotFlow { revision.longValue }.collectLatest {
             scrollPx = scrollToCaret(state, metrics, scrollPx, viewportHeight)
             scrollXPx = scrollXToCaret(
-                state, metrics, scrollXPx,
-                viewportWidth - gutterWidthPx(state.text.lineCount, metrics),
+                caret = caretBounds(state, lineLayout),
+                scrollXPx = scrollXPx,
+                textWidth = viewportWidth - gutterWidthPx(state.text.lineCount, metrics),
             )
             caretVisible = true
             while (true) {
@@ -187,7 +214,9 @@ fun CodeEditor(
                     val gutter = gutterWidthPx(text.lineCount, metrics)
                     state.setCarets(
                         CaretSet.single(
-                            offsetAt(text, metrics, gutter, scrollPx, scrollXPx, position)
+                            offsetAt(text, metrics, gutter, scrollPx, scrollXPx, position) { line, x ->
+                                lineLayout(line).getOffsetForPosition(Offset(x, 0f))
+                            }
                         )
                     )
                     runCatching { focusRequester.requestFocus() }
@@ -242,6 +271,7 @@ fun CodeEditor(
                 widestLinePx,
                 drawEditor(
                     state = state,
+                    lineLayout = lineLayout,
                     measurer = measurer,
                     style = style,
                     cache = cache,
@@ -252,8 +282,6 @@ fun CodeEditor(
                     scrollXPx = scrollXPx,
                     caretVisible = caretVisible,
                     search = search,
-                    highlighter = highlighter,
-                    lineStates = lineStates,
                 ),
             )
             probe?.let {
@@ -279,7 +307,7 @@ private const val GUTTER_PADDING_DIGITS = 2
  */
 private const val GUTTER_KEY_PREFIX = "\u0000gutter\u0000"
 
-private fun gutterWidthPx(lineCount: Int, metrics: LineMetrics): Float {
+internal fun gutterWidthPx(lineCount: Int, metrics: LineMetrics): Float {
     val digits = lineCount.toString().length + GUTTER_PADDING_DIGITS
     return digits * metrics.digitWidth
 }
@@ -297,6 +325,7 @@ private fun maxScrollPx(state: EditorState, metrics: LineMetrics, viewportHeight
 /** Рисует видимые строки и возвращает ширину самой широкой из них. */
 private fun DrawScope.drawEditor(
     state: EditorState,
+    lineLayout: (Int) -> TextLayoutResult,
     measurer: TextMeasurer,
     style: TextStyle,
     cache: LineLayoutCache<TextLayoutResult>,
@@ -307,8 +336,6 @@ private fun DrawScope.drawEditor(
     scrollXPx: Float,
     caretVisible: Boolean,
     search: SearchSession?,
-    highlighter: LineHighlighter,
-    lineStates: LineStates,
 ): Float {
     val text = state.text
     if (metrics.height <= 0f) return 0f
@@ -343,26 +370,8 @@ private fun DrawScope.drawEditor(
                 val top = line * metrics.height
                 val lineStart = text.lineStart(line)
                 val lineEnd = text.lineEnd(line)
-                val lineText = text.substring(lineStart, lineEnd)
 
-                // Состояние входит в ключ кэша: строка внутри докстринга и такая же
-                // снаружи выглядят одинаково, а красятся по-разному.
-                val stateBefore = lineStates.stateBefore(state.document, line)
-                val key = if (stateBefore == 0) lineText else "$stateBefore\u0000$lineText"
-
-                val layout = cache.get(key) {
-                    // Без переноса и без ограничения ширины. Перенос сломал бы всю
-                    // арифметику: высота строки здесь постоянная, и перенесённый
-                    // хвост рисовался бы поверх следующей строки. Цена — разметка
-                    // строки целиком, какой бы длинной она ни была; на файле из
-                    // одной строки в мегабайт это будет заметно.
-                    measurer.measure(
-                        highlighted(lineText, stateBefore, highlighter, colors),
-                        style,
-                        softWrap = false,
-                        constraints = Constraints(),
-                    )
-                }
+                val layout = lineLayout(line)
                 widest = max(widest, layout.size.width.toFloat())
 
                 for (match in matches) {
@@ -524,41 +533,48 @@ internal fun offsetAt(
     scrollPx: Float,
     scrollXPx: Float,
     position: Offset,
+    columnAt: (line: Int, x: Float) -> Int,
 ): Int {
     val line = ((position.y + scrollPx) / metrics.height).toInt().coerceIn(0, text.lineCount - 1)
     val lineStart = text.lineStart(line)
     val lineEnd = text.lineEnd(line)
 
-    // Колонка считается по ширине цифры: шрифт моноширинный, все знаки одинаковы.
+    // Колонку определяет разметка строки, а не ширина цифры: табуляция и
+    // иероглиф шире цифры, и арифметика по одной ширине на них уезжает.
     val x = position.x - gutterWidth + scrollXPx
-    val column = (x / metrics.digitWidth).roundToInt().coerceAtLeast(0)
+    val column = columnAt(line, x.coerceAtLeast(0f))
     return (lineStart + column).coerceIn(lineStart, lineEnd)
 }
 
-/**
- * Сдвигает по горизонтали так, чтобы курсор остался виден.
- *
- * Позиция курсора считается по ширине цифры, а не по разметке строки: разметка
- * живёт в фазе отрисовки, а сюда приходят из обработчиков ввода. Для
- * моноширинного шрифта это одно и то же — ровно то же допущение, на котором
- * стоит попадание тапа.
- */
-internal fun scrollXToCaret(
-    state: EditorState,
-    metrics: LineMetrics,
-    scrollXPx: Float,
-    textWidth: Float,
-): Float {
-    if (textWidth <= 0f || metrics.digitWidth <= 0f) return scrollXPx
+/** Левая и правая границы курсора в координатах строки. */
+internal data class CaretBounds(val left: Float, val right: Float)
 
-    val caret = state.carets.primary.head
-    val column = caret - state.text.lineStart(state.text.lineOf(caret))
-    val left = column * metrics.digitWidth
-    val right = left + metrics.digitWidth
+/** Где стоит основной курсор по горизонтали — по разметке его строки. */
+internal fun caretBounds(state: EditorState, lineLayout: (Int) -> TextLayoutResult): CaretBounds {
+    val text = state.text
+    val head = state.carets.primary.head
+    val line = text.lineOf(head)
+    val layout = lineLayout(line)
+    val column = (head - text.lineStart(line)).coerceIn(0, layout.layoutInput.text.length)
+
+    val left = layout.getHorizontalPosition(column, usePrimaryDirection = true)
+    // Правая граница — следующая позиция, если она есть: курсор должен въезжать
+    // в окно целиком, а не краем.
+    val right = if (column < layout.layoutInput.text.length) {
+        layout.getHorizontalPosition(column + 1, usePrimaryDirection = true)
+    } else {
+        left
+    }
+    return CaretBounds(left, right)
+}
+
+/** Сдвигает по горизонтали так, чтобы курсор остался виден. */
+internal fun scrollXToCaret(caret: CaretBounds, scrollXPx: Float, textWidth: Float): Float {
+    if (textWidth <= 0f) return scrollXPx
 
     return when {
-        left < scrollXPx -> left
-        right > scrollXPx + textWidth -> right - textWidth
+        caret.left < scrollXPx -> caret.left
+        caret.right > scrollXPx + textWidth -> caret.right - textWidth
         else -> scrollXPx
     }
 }

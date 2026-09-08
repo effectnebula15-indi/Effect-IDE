@@ -9,6 +9,7 @@ import io.github.effectnebula.eide.core.text.Rope
 import io.github.effectnebula.eide.platform.GraphemeBreaker
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.math.roundToInt
 import kotlin.test.assertTrue
 
 /** Разбиение по кодовым единицам: тестам геометрии настоящий ICU не нужен. */
@@ -30,13 +31,23 @@ class CodeEditorGeometryTest {
 
     private fun text(vararg lines: String) = Rope.of(lines.joinToString("\n"))
 
+    /**
+     * Колонка по ширине цифры.
+     *
+     * В самом редакторе колонку определяет разметка строки; здесь она подставлена
+     * простой арифметикой, потому что проверяется не она, а всё вокруг неё: выбор
+     * строки, учёт обеих прокруток и удержание в границах строки.
+     */
+    private val monospaceColumn: (Int, Float) -> Int =
+        { _, x -> (x / metrics.digitWidth).roundToInt().coerceAtLeast(0) }
+
     // --- попадание тапа --------------------------------------------------------
 
     @Test
     fun `tap picks the line under the finger`() {
         val rope = text("first", "second", "third")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(gutter + 5f, 25f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, columnAt = monospaceColumn, position = Offset(gutter + 5f, 25f))
 
         assertEquals(1, rope.lineOf(offset), "палец во второй строке, а попали не туда")
     }
@@ -46,7 +57,7 @@ class CodeEditorGeometryTest {
         val rope = text("one", "two", "three", "four", "five")
 
         // Прокрутили на две строки: верх экрана это третья строка.
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 40f, scrollXPx = 0f, position = Offset(gutter + 5f, 5f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 40f, scrollXPx = 0f, columnAt = monospaceColumn, position = Offset(gutter + 5f, 5f))
 
         assertEquals(2, rope.lineOf(offset))
     }
@@ -55,7 +66,7 @@ class CodeEditorGeometryTest {
     fun `tap past the end of a line stops at its end`() {
         val rope = text("ab", "longer line")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(gutter + 500f, 5f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, columnAt = monospaceColumn, position = Offset(gutter + 500f, 5f))
 
         assertEquals(2, offset, "курсор уехал за конец строки")
     }
@@ -64,7 +75,7 @@ class CodeEditorGeometryTest {
     fun `tap on the gutter lands at the line start`() {
         val rope = text("first", "second")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(5f, 25f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, columnAt = monospaceColumn, position = Offset(5f, 25f))
 
         assertEquals(rope.lineStart(1), offset)
     }
@@ -73,7 +84,7 @@ class CodeEditorGeometryTest {
     fun `tap below the last line stops at the last line`() {
         val rope = text("one", "two")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(gutter + 5f, 5000f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, columnAt = monospaceColumn, position = Offset(gutter + 5f, 5000f))
 
         assertEquals(1, rope.lineOf(offset), "тап в пустоту под текстом ушёл за пределы документа")
     }
@@ -86,7 +97,7 @@ class CodeEditorGeometryTest {
         val offset = offsetAt(
             rope, metrics, gutter,
             scrollPx = 0f, scrollXPx = 5 * metrics.digitWidth,
-            position = Offset(gutter + 1f, 5f),
+            position = Offset(gutter + 1f, 5f), columnAt = monospaceColumn,
         )
 
         assertEquals(5, offset)
@@ -138,18 +149,17 @@ class CodeEditorGeometryTest {
 
     // --- горизонтальная прокрутка за курсором ----------------------------------
 
+    private fun caretAt(column: Int) =
+        CaretBounds(column * metrics.digitWidth, (column + 1) * metrics.digitWidth)
+
     @Test
     fun `visible caret does not move the viewport sideways`() {
-        val state = editorAt(3, "0123456789")
-
-        assertEquals(0f, scrollXToCaret(state, metrics, scrollXPx = 0f, textWidth = 200f))
+        assertEquals(0f, scrollXToCaret(caretAt(3), scrollXPx = 0f, textWidth = 200f))
     }
 
     @Test
     fun `caret past the right edge scrolls just enough`() {
-        val state = editorAt(30, "0".repeat(100))
-
-        val scroll = scrollXToCaret(state, metrics, scrollXPx = 0f, textWidth = 200f)
+        val scroll = scrollXToCaret(caretAt(30), scrollXPx = 0f, textWidth = 200f)
 
         // Курсор в 31-й колонке должен встать у правого края, а не в середине.
         assertEquals(31 * metrics.digitWidth - 200f, scroll)
@@ -157,25 +167,19 @@ class CodeEditorGeometryTest {
 
     @Test
     fun `caret left of the viewport scrolls back to it`() {
-        val state = editorAt(2, "0".repeat(100))
-
-        assertEquals(2 * metrics.digitWidth, scrollXToCaret(state, metrics, scrollXPx = 500f, textWidth = 200f))
+        assertEquals(2 * metrics.digitWidth, scrollXToCaret(caretAt(2), scrollXPx = 500f, textWidth = 200f))
     }
 
     @Test
-    fun `a caret on the next line resets the sideways scroll`() {
+    fun `a caret at the line start resets the sideways scroll`() {
         // Переход на короткую строку не должен оставлять экран уехавшим вправо:
         // человек смотрит на пустоту и не понимает, куда делся текст.
-        val state = editorAt(101, "0".repeat(100), "x")
-
-        assertEquals(0f, scrollXToCaret(state, metrics, scrollXPx = 500f, textWidth = 200f))
+        assertEquals(0f, scrollXToCaret(caretAt(0), scrollXPx = 500f, textWidth = 200f))
     }
 
     @Test
     fun `zero width leaves sideways scrolling alone`() {
-        val state = editorAt(0, "one")
-
-        assertEquals(77f, scrollXToCaret(state, metrics, scrollXPx = 77f, textWidth = 0f))
+        assertEquals(77f, scrollXToCaret(caretAt(0), scrollXPx = 77f, textWidth = 0f))
     }
 
     @Test
