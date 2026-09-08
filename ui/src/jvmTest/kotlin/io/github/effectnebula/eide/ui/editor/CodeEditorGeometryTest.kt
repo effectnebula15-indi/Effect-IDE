@@ -11,7 +11,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private object PlainBreaker : GraphemeBreaker {
+/** Разбиение по кодовым единицам: тестам геометрии настоящий ICU не нужен. */
+internal object PlainBreaker : GraphemeBreaker {
     override fun next(line: CharSequence, from: Int): Int = minOf(from + 1, line.length)
     override fun previous(line: CharSequence, from: Int): Int = maxOf(from - 1, 0)
 }

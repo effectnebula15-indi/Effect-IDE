@@ -22,6 +22,11 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.junit.jupiter)
             runtimeOnly(libs.junit.platform.launcher)
+
+            // Проверка самого интерфейса: жесты, попадание, отрисовка. Единственный
+            // способ увидеть поведение UI, не имея телефона и не нажимая руками.
+            implementation(libs.compose.ui.test)
+            implementation(compose.desktop.currentOs)
         }
 
         commonMain.dependencies {
