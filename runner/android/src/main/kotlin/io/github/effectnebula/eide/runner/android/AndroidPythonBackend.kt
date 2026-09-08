@@ -4,7 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import io.github.effectnebula.eide.core.exec.ExecutionBackend
+import io.github.effectnebula.eide.core.exec.KillReason
 import io.github.effectnebula.eide.core.exec.MessageType
+import io.github.effectnebula.eide.core.exec.RunHandle
+import io.github.effectnebula.eide.core.exec.RunLimits
+import io.github.effectnebula.eide.core.exec.RunListener
+import io.github.effectnebula.eide.core.exec.RunSpec
 import io.github.effectnebula.eide.core.exec.Wire
 import java.io.File
 import java.io.FileInputStream
@@ -18,30 +24,20 @@ import org.json.JSONObject
  * Канал — пара сокетов из `ParcelFileDescriptor.createSocketPair()`, переданная
  * сервису через Intent. Не abstract-namespace unix-сокет и не порт на loopback:
  * и то, и другое на Android видно другим приложениям, а пара дескрипторов — нет.
+ *
+ * [canvas] — область кадров графики, если она есть. Задаётся при создании, а не
+ * на каждый запуск: область переживает несколько запусков, а раннер одноразовый,
+ * и это свойство бэкенда, а не конкретного запуска.
  */
-class AndroidPythonBackend(private val context: Context) {
+class AndroidPythonBackend(
+    private val context: Context,
+    private val canvas: CanvasArea? = null,
+) : ExecutionBackend {
 
-    interface Listener {
-        fun onStarted(pid: Int)
-        fun onStdout(chunk: String)
-        fun onStderr(chunk: String)
-        fun onExit(code: Int)
-        fun onKilled(reason: KillReason)
-        fun onFailure(error: Throwable)
-    }
-
-    /**
-     * [canvas] — область кадров графики или `null`, если программа запускается
-     * без неё. Владеет областью вызывающий: она переживает несколько запусков,
-     * а раннер одноразовый.
-     */
-    fun run(
-        script: File,
-        workDir: File,
-        limits: RunLimits = RunLimits(),
-        canvas: CanvasArea? = null,
-        listener: Listener,
-    ): Handle {
+    override fun run(spec: RunSpec, listener: RunListener): RunHandle {
+        val script = spec.script
+        val workDir = spec.workDir
+        val limits = spec.limits
         val pair = ParcelFileDescriptor.createSocketPair()
         val mine = pair[0]
         val theirs = pair[1]
@@ -78,7 +74,7 @@ class AndroidPythonBackend(private val context: Context) {
         return handle
     }
 
-    private fun receive(channel: ParcelFileDescriptor, handle: Handle, listener: Listener) {
+    private fun receive(channel: ParcelFileDescriptor, handle: Handle, listener: RunListener) {
         try {
             FileInputStream(channel.fileDescriptor).use { input ->
                 while (true) {
@@ -121,7 +117,7 @@ class AndroidPythonBackend(private val context: Context) {
     class Handle internal constructor(
         private val channel: ParcelFileDescriptor,
         private val limits: RunLimits,
-    ) {
+    ) : RunHandle {
         private val killedFor = AtomicReference<KillReason?>(null)
         @Volatile private var pid: Int = -1
         @Volatile private var reader: Thread? = null
@@ -149,7 +145,7 @@ class AndroidPythonBackend(private val context: Context) {
             runCatching { channel.close() }
         }
 
-        fun stop() = kill(KillReason.ByUser)
+        override fun stop() = kill(KillReason.ByUser)
 
         private fun kill(reason: KillReason) {
             if (!killedFor.compareAndSet(null, reason)) return

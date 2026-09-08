@@ -39,14 +39,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import io.github.effectnebula.eide.core.exec.KillReason
+import io.github.effectnebula.eide.core.exec.RunHandle
+import io.github.effectnebula.eide.core.exec.RunListener
+import io.github.effectnebula.eide.core.exec.RunLimits
+import io.github.effectnebula.eide.core.exec.RunSpec
 import io.github.effectnebula.eide.core.project.OpenFile
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
 import io.github.effectnebula.eide.platform.android.IcuGraphemeBreaker
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
 import io.github.effectnebula.eide.runner.android.CanvasArea
-import io.github.effectnebula.eide.runner.android.KillReason
-import io.github.effectnebula.eide.runner.android.RunLimits
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkDocument
@@ -55,6 +58,7 @@ import io.github.effectnebula.eide.ui.editor.ExtraKeyRow
 import io.github.effectnebula.eide.ui.editorColors
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
+import io.github.effectnebula.eide.ui.run.OutputPanel
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -219,7 +223,7 @@ private fun WorkbenchScreen(
 
     var output by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("готов") }
-    var handle by remember { mutableStateOf<AndroidPythonBackend.Handle?>(null) }
+    var handle by remember { mutableStateOf<RunHandle?>(null) }
 
     /** Пишет всё изменённое синхронно. Возвращает активный файл, если он есть. */
     fun saveNow(): OpenFile? {
@@ -256,12 +260,13 @@ private fun WorkbenchScreen(
         onRunStarted()
 
         val startedAt = System.currentTimeMillis()
-        handle = AndroidPythonBackend(context).run(
-            script = target.file,
-            workDir = projectDir,
-            limits = PROTOTYPE_LIMITS,
-            canvas = canvas,
-            listener = object : AndroidPythonBackend.Listener {
+        handle = AndroidPythonBackend(context, canvas).run(
+            spec = RunSpec(
+                script = target.file,
+                workDir = projectDir,
+                limits = PROTOTYPE_LIMITS,
+            ),
+            listener = object : RunListener {
                 override fun onStarted(pid: Int) = onMain { status = "работает, процесс $pid" }
                 override fun onStdout(chunk: String) = onMain { output += chunk }
                 override fun onStderr(chunk: String) = onMain { output += chunk }
@@ -356,21 +361,7 @@ private fun WorkbenchScreen(
             Label("предел ${PROTOTYPE_LIMITS.timeoutMillis} мс", TextDim, 11)
         }
 
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .weight(0.8f)
-                .background(Panel)
-                .verticalScroll(rememberScrollState())
-                .padding(12.dp)
-        ) {
-            Label(
-                text = output.ifEmpty { "вывод программы появится здесь" },
-                color = if (output.isEmpty()) TextDim else TextColor,
-                size = 13,
-                mono = true,
-            )
-        }
+        OutputPanel(output, Modifier.fillMaxWidth().weight(0.8f))
 
         // Самым нижним элементом: ряд должен быть вплотную к клавиатуре, иначе
         // до него не дотянуться большим пальцем, ради которого он и нужен.

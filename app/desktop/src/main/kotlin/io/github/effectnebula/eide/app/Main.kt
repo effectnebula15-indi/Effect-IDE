@@ -10,13 +10,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -27,15 +31,23 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import io.github.effectnebula.eide.core.exec.KillReason
+import io.github.effectnebula.eide.core.exec.RunHandle
+import io.github.effectnebula.eide.core.exec.RunLimits
+import io.github.effectnebula.eide.core.exec.RunListener
+import io.github.effectnebula.eide.core.exec.RunSpec
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
 import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
+import io.github.effectnebula.eide.runner.LocalPythonBackend
 import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkDocument
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
+import io.github.effectnebula.eide.ui.run.OutputPanel
 import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import androidx.compose.runtime.CompositionLocalProvider
@@ -67,7 +79,7 @@ fun main() = application {
         // Самоснимок: -Deide.screenshot=/путь.png сохраняет окно и выходит.
         // Существует потому, что интерфейс пишется вслепую — без этого о нём
         // можно судить только по тому, что сборка не упала.
-        System.getProperty("eide.screenshot")?.let { path ->
+        Debug.screenshot?.let { path ->
             LaunchedEffect(Unit) {
                 delay(SCREENSHOT_SETTLE_MS)
                 captureScreen(File(path))
@@ -120,11 +132,11 @@ private fun DesktopShell() {
     val workspace = remember {
         // -Deide.project=/путь открывает чужую папку; по умолчанию — та, из
         // которой запущено приложение.
-        val root = System.getProperty("eide.project") ?: System.getProperty("user.dir")
+        val root = Debug.project ?: System.getProperty("user.dir")
         Workspace(ProjectTree(File(root)), JdkGraphemeBreaker()).apply {
             // -Deide.open=путь открывает файл на старте. Нужно для самоснимка:
             // иначе увидеть редактор с вкладками можно только руками.
-            System.getProperty("eide.open")?.let { open(File(root, it)) }
+            Debug.open?.let { open(File(root, it)) }
         }
     }
     var revision by remember { mutableStateOf(0) }
@@ -172,23 +184,151 @@ private fun DesktopShell() {
                     onClose = { workspace.saveModified(); workspace.close(it.file); revision++ },
                 )
 
-                if (active != null) {
-                    EditorScreen(active.state, Modifier.weight(1f))
-                } else {
-                    Box(Modifier.weight(1f).padding(16.dp)) {
-                        BasicText(
-                            "выберите файл в дереве слева",
-                            style = TextStyle(color = Eide.colors.textDim, fontSize = 13.sp),
-                        )
-                    }
-                }
+                RunPanel(workspace, active) { revision++ }
             }
         }
     }
 }
 
+/**
+ * Редактор с запуском и панелью вывода.
+ *
+ * На десктопе интерпретатор — обычная программа, поэтому граница процессов уже
+ * есть и городить свой раннер незачем. Обещания при этом те же, что на телефоне:
+ * Stop останавливает всегда, зависшую программу снимает сторож.
+ */
+@Composable
+private fun RunPanel(
+    workspace: Workspace,
+    active: io.github.effectnebula.eide.core.project.OpenFile?,
+    onChanged: () -> Unit,
+) {
+    var output by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("готов") }
+    var handle by remember { mutableStateOf<RunHandle?>(null) }
+    val scope = rememberCoroutineScope()
+    var autoRun by remember { mutableStateOf(Debug.autoRun) }
+
+    fun onMain(action: () -> Unit) {
+        // Слушатель зовут из фоновых потоков бэкенда. Складывать строки вывода
+        // из нескольких потоков без переноса в один — верный способ потерять
+        // часть текста.
+        scope.launch { action() }
+    }
+
+    fun run() {
+        val target = active ?: return
+        workspace.saveModified()
+        onChanged()
+
+        output = ""
+        status = "запускаю…"
+        val startedAt = System.currentTimeMillis()
+
+        handle = LocalPythonBackend().run(
+            RunSpec(
+                script = target.file,
+                workDir = workspace.tree.root,
+                limits = RunLimits(timeoutMillis = 30_000, maxResidentBytes = 512L * 1024 * 1024),
+            ),
+            object : RunListener {
+                override fun onStarted(pid: Int) = onMain { status = "работает, процесс $pid" }
+                override fun onStdout(chunk: String) = onMain { output += chunk }
+                override fun onStderr(chunk: String) = onMain { output += chunk }
+
+                override fun onExit(code: Int) = onMain {
+                    output += "\n[код $code за ${System.currentTimeMillis() - startedAt} мс]\n"
+                    status = "готов"
+                    handle = null
+                }
+
+                override fun onKilled(reason: KillReason) = onMain {
+                    val why = when (reason) {
+                        KillReason.ByUser -> "остановлена вручную"
+                        KillReason.Timeout -> "снята по таймауту"
+                        KillReason.Memory -> "снята по пределу памяти"
+                    }
+                    output += "\n[$why через ${System.currentTimeMillis() - startedAt} мс]\n"
+                    status = "готов"
+                    handle = null
+                }
+
+                override fun onFailure(error: Throwable) = onMain {
+                    output += "\n[запустить не удалось: $error]\n"
+                    status = "готов"
+                    handle = null
+                }
+            },
+        )
+    }
+
+    // Автозапуск для самопроверки: нажать Run самому я не могу, а увидеть, что
+    // путь от кнопки до вывода работает, надо.
+    if (autoRun && active != null) {
+        LaunchedEffect(active) {
+            autoRun = false
+            run()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Eide.colors.panel)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val running = handle != null
+            Tab(if (running) "Stop" else "Run", selected = true) {
+                if (running) handle?.stop() else run()
+            }
+            BasicText(status, style = TextStyle(color = Eide.colors.textDim, fontSize = 12.sp))
+        }
+
+        if (active != null) {
+            EditorScreen(active.state, Modifier.weight(1f))
+        } else {
+            Box(Modifier.weight(1f).padding(16.dp)) {
+                BasicText(
+                    "выберите файл в дереве слева",
+                    style = TextStyle(color = Eide.colors.textDim, fontSize = 13.sp),
+                )
+            }
+        }
+
+        OutputPanel(output, Modifier.fillMaxWidth().weight(OUTPUT_WEIGHT))
+    }
+}
+
 /** Ширина колонки дерева: помещается путь средней длины, но не съедает редактор. */
 private val TREE_WIDTH = 280.dp
+
+/** Доля высоты под вывод: видно десяток строк, но редактор остаётся главным. */
+private const val OUTPUT_WEIGHT = 0.35f
+
+/**
+ * Отладочные ключи десктопной сборки.
+ *
+ * Существуют потому, что интерфейс пишется без возможности его увидеть и
+ * потрогать: снимок экрана и автозапуск — единственный способ проверить, что
+ * путь от кнопки до вывода работает, а не только компилируется. В обычном
+ * запуске ни один из них не задан, и приложение ведёт себя как обычно.
+ */
+private object Debug {
+    /** `-Deide.screenshot=/путь.png` — снять экран и выйти. */
+    val screenshot: String? get() = System.getProperty("eide.screenshot")
+
+    /** `-Deide.project=/путь` — что считать проектом. */
+    val project: String? get() = System.getProperty("eide.project")
+
+    /** `-Deide.open=путь` — открыть файл на старте. */
+    val open: String? get() = System.getProperty("eide.open")
+
+    /** `-Deide.run` — запустить открытый файл сразу. */
+    val autoRun: Boolean get() = System.getProperty("eide.run") != null
+}
 
 /**
  * Пауза перед снимком: первый кадр Compose рисует не сразу, а под программной

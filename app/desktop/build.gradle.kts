@@ -40,6 +40,7 @@ tasks.withType<JavaExec>().configureEach {
     System.getProperty("eide.screenshot")?.let { systemProperty("eide.screenshot", it) }
     System.getProperty("eide.project")?.let { systemProperty("eide.project", it) }
     System.getProperty("eide.open")?.let { systemProperty("eide.open", it) }
+    System.getProperty("eide.run")?.let { systemProperty("eide.run", it) }
     // Иначе вывод замера приезжает вопросительными знаками там, где кириллица.
     systemProperty("file.encoding", "UTF-8")
     systemProperty("stdout.encoding", "UTF-8")
