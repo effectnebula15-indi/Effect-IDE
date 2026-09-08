@@ -21,9 +21,10 @@ import io.github.effectnebula.eide.core.editor.MoveTo
  * На Android это не экзотика: телефон или планшет с bluetooth-клавиатурой —
  * заявленный сценарий, и на нём редактор обязан работать полностью.
  *
- * Экранная клавиатура сюда не приходит: она общается через IME, и это отдельная
- * работа. Пока её нет, на телефоне без внешней клавиатуры набирать нельзя, и
- * говорить об этом надо прямо.
+ * Экранная клавиатура сюда не приходит: она общается через `InputConnection` —
+ * это `imeInput`. Исключение — клавиши, которые она шлёт как настоящие нажатия
+ * (стрелки, у части клавиатур Backspace): их `BaseInputConnection.sendKeyEvent`
+ * пересылает во View, и они попадают именно сюда.
  */
 internal fun Modifier.editorKeyInput(state: EditorState, afterAction: () -> Unit): Modifier =
     onKeyEvent { event ->
