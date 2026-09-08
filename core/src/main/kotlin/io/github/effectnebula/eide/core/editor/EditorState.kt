@@ -127,6 +127,44 @@ class EditorState(
         applyEdit(edit, EditKind.Other)
     }
 
+    /**
+     * Правка с явной постановкой одного курсора и выделения.
+     *
+     * Нужна системной клавиатуре: IME мыслит одним выделением в абсолютных
+     * офсетах и сам решает, где окажется курсор после правки. Раскладывать
+     * такую правку по всем курсорам нельзя — остальных IME не видит, и
+     * результат ему нечем объяснить.
+     *
+     * Возвращает `false`, если ничего не изменилось: лишнее уведомление
+     * оборачивается лишним `updateSelection`, а от него некоторые клавиатуры
+     * сбрасывают своё состояние.
+     */
+    fun applyWithSelection(
+        edit: EditTransaction,
+        anchor: Int,
+        head: Int,
+        kind: EditKind = EditKind.Typing,
+    ): Boolean {
+        val meaningful = edit.replacements.filter { it.start != it.end || it.text.isNotEmpty() }
+        val textChanged = meaningful.isNotEmpty() &&
+            document.apply(EditTransaction(meaningful), kind) != null
+
+        val length = document.text.length
+        val target = Caret(anchor.coerceIn(0, length), head.coerceIn(0, length))
+        val current = carets.carets.singleOrNull()
+        // desiredColumn намеренно не сравниваем: он про вертикальное движение,
+        // а IME его не задаёт и не читает.
+        val caretsChanged = current == null ||
+            current.anchor != target.anchor ||
+            current.head != target.head
+
+        if (!textChanged && !caretsChanged) return false
+
+        carets = CaretSet.of(listOf(target))
+        notifyChanged()
+        return true
+    }
+
     // --- история ---------------------------------------------------------------
 
     fun undo(): Boolean = step(document.undo() != null)
