@@ -129,6 +129,33 @@ static void test_no_frame_before_end(void) {
     free(area);
 }
 
+static void test_latest_frame_without_copying(void) {
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+
+    /* Ни одного кадра — значит программа ещё ничего не нарисовала. */
+    assert(ec_latest_frame(area, size) == 0);
+
+    ec_begin_frame(ctx);
+    ec_clear(ctx, 0x11223344u);
+    /* Кадр не опубликован — считать его нарисованным нельзя. */
+    assert(ec_latest_frame(area, size) == 0);
+
+    ec_end_frame(ctx);
+    assert(ec_latest_frame(area, size) == 1);
+
+    for (int i = 0; i < 5; i++) {
+        ec_begin_frame(ctx);
+        ec_clear(ctx, 0x00000000u);
+        ec_end_frame(ctx);
+    }
+    assert(ec_latest_frame(area, size) == 6);
+
+    ec_close(ctx);
+    free(area);
+}
+
 static void test_reader_skips_what_it_already_has(void) {
     size_t size;
     void *area = make_area(&size);
@@ -370,6 +397,7 @@ int main(void) {
     test_garbage_is_not_mistaken_for_a_frame();
     test_a_foreign_area_is_refused();
     test_no_frame_before_end();
+    test_latest_frame_without_copying();
     test_reader_skips_what_it_already_has();
     test_newest_frame_wins_after_a_full_round();
     test_writer_death_leaves_the_last_frame_readable();

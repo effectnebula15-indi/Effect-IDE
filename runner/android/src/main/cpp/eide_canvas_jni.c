@@ -39,6 +39,16 @@ Java_io_github_effectnebula_eide_runner_android_CanvasArea_nativeAddressOf(
     return (jlong)(intptr_t)(*env)->GetDirectBufferAddress(env, area);
 }
 
+JNIEXPORT jlong JNICALL
+Java_io_github_effectnebula_eide_runner_android_CanvasArea_nativeLatestFrame(
+        JNIEnv *env, jclass clazz, jobject area) {
+    UNUSED(clazz);
+    void *address = (*env)->GetDirectBufferAddress(env, area);
+    jlong capacity = (*env)->GetDirectBufferCapacity(env, area);
+    if (address == NULL || capacity <= 0) return 0;
+    return (jlong)ec_latest_frame(address, (size_t)capacity);
+}
+
 /*
  * Кадр читается прямо в пиксели Bitmap: лишняя промежуточная копия при 60 кадрах
  * в секунду стоит заметно, а `Bitmap.copyPixelsFromBuffer` — это именно она.

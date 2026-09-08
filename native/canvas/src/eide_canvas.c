@@ -235,6 +235,25 @@ void ec_fill_rect(ec_ctx *ctx, int32_t x, int32_t y, int32_t w, int32_t h, uint3
     }
 }
 
+uint64_t ec_latest_frame(void *area, size_t size) {
+    ec_area_header *header = validate(area, size);
+    if (header == NULL) return 0;
+
+    ec_slot_state *slots = (ec_slot_state *)((unsigned char *)area + 64);
+    uint64_t newest = 0;
+
+    for (uint32_t slot = 0; slot < EC_SLOTS; slot++) {
+        uint64_t before = atomic_load_explicit(&slots[slot].seq, memory_order_acquire);
+        if (before == 0 || (before & 1u) != 0) continue;
+
+        uint64_t frame = atomic_load_explicit(&slots[slot].frame, memory_order_relaxed);
+        if (atomic_load_explicit(&slots[slot].seq, memory_order_relaxed) != before) continue;
+        if (frame > newest) newest = frame;
+    }
+
+    return newest;
+}
+
 uint64_t ec_read_frame(void *area, size_t size, void *dst, size_t dst_size, uint64_t since) {
     ec_area_header *header = validate(area, size);
     if (header == NULL || dst == NULL || dst_size < header->slot_bytes) return 0;

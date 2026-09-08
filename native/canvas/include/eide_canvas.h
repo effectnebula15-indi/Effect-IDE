@@ -100,6 +100,15 @@ void ec_end_frame(ec_ctx *ctx);
  */
 uint64_t ec_read_frame(void *area, size_t size, void *dst, size_t dst_size, uint64_t since);
 
+/**
+ * Номер последнего целого кадра — без копирования.
+ *
+ * Нужен, чтобы узнать, рисует ли программа вообще: `ec_read_frame` ради того
+ * же ответа скопировал бы полтора мегабайта. Возвращает 0, если ни одного
+ * кадра ещё не было или области верить нельзя.
+ */
+uint64_t ec_latest_frame(void *area, size_t size);
+
 #ifdef __cplusplus
 }
 #endif

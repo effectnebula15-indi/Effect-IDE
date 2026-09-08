@@ -22,10 +22,12 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -100,6 +102,30 @@ private fun App() {
 
     var showCanvas by remember { mutableStateOf(false) }
 
+    // Взводится на Run и снимается первым же показом. Без этого свайп к коду
+    // был бы бесполезен: следующий кадр немедленно вернул бы на графику, и с
+    // работающей программой до редактора не добраться.
+    var awaitingFirstFrame by remember { mutableStateOf(false) }
+
+    /*
+     * Переключаемся на графику сами, когда программа нарисовала первый кадр.
+     * Заранее знать, графическая ли она, нельзя, а заставлять жать вторую
+     * кнопку после Run — значит, что первый запуск выглядит как «ничего не
+     * произошло». Проверка дешёвая: номер кадра читается без копирования.
+     */
+    LaunchedEffect(canvas, awaitingFirstFrame) {
+        if (canvas == null || !awaitingFirstFrame) return@LaunchedEffect
+        val before = canvas.latestFrame()
+        while (true) {
+            withFrameNanos { }
+            if (canvas.latestFrame() > before) {
+                awaitingFirstFrame = false
+                showCanvas = true
+                return@LaunchedEffect
+            }
+        }
+    }
+
     if (showCanvas && canvas != null) {
         // Полный экран без вкладок и без системных отступов: графика занимает
         // всё, свайп возвращает к коду, программа продолжает работать.
@@ -118,7 +144,11 @@ private fun App() {
 
         Box(Modifier.fillMaxSize()) {
             when (screen) {
-                Screen.Code -> CodeScreen(canvas, onShowCanvas = { showCanvas = true })
+                Screen.Code -> CodeScreen(
+                    canvas = canvas,
+                    onShowCanvas = { showCanvas = true },
+                    onRunStarted = { awaitingFirstFrame = true },
+                )
                 Screen.Render -> {
                     // Документ строится один раз: пересборка на кадре испортила бы замер.
                     val document = remember { benchmarkDocument() }
@@ -136,7 +166,11 @@ private fun App() {
  * Stop убивает процесс, сторожевые лимиты снимают зависшую программу.
  */
 @Composable
-private fun CodeScreen(canvas: CanvasArea?, onShowCanvas: () -> Unit) {
+private fun CodeScreen(
+    canvas: CanvasArea?,
+    onShowCanvas: () -> Unit,
+    onRunStarted: () -> Unit,
+) {
     val context = LocalContext.current
 
     val projectDir = remember {
@@ -181,6 +215,7 @@ private fun CodeScreen(canvas: CanvasArea?, onShowCanvas: () -> Unit) {
     fun run() {
         output = ""
         status = "сохраняю и запускаю…"
+        onRunStarted()
         // Синхронно, а не через автосохранение: запускать надо ровно то, что
         // видно на экране, а не то, что успело записаться.
         saveNow()

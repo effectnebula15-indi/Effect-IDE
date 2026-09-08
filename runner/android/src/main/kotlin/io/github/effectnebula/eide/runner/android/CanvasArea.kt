@@ -43,6 +43,14 @@ class CanvasArea private constructor(
     fun readFrameInto(bitmap: Bitmap, since: Long): Long =
         nativeReadFrame(buffer, bitmap, since)
 
+    /**
+     * Номер последнего нарисованного кадра — без копирования.
+     *
+     * По нему видно, рисует ли программа вообще: `readFrameInto` ради того же
+     * ответа скопировал бы полтора мегабайта.
+     */
+    fun latestFrame(): Long = nativeLatestFrame(buffer)
+
     /** Bitmap нужного формата и размера. */
     fun createBitmap(): Bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
@@ -99,6 +107,7 @@ class CanvasArea private constructor(
         @JvmStatic private external fun nativeAreaSize(width: Int, height: Int): Long
         @JvmStatic private external fun nativeInitArea(area: ByteBuffer, width: Int, height: Int): Boolean
         @JvmStatic private external fun nativeAddressOf(area: ByteBuffer): Long
+        @JvmStatic private external fun nativeLatestFrame(area: ByteBuffer): Long
         @JvmStatic private external fun nativeReadFrame(area: ByteBuffer, bitmap: Bitmap, since: Long): Long
     }
 }
