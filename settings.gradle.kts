@@ -22,6 +22,10 @@ include(":core")
 include(":platform:api")
 include(":platform:desktop")
 include(":runner")
+
+// Git в отдельном модуле, а не в :core (ADR-006): JGit не должен ехать
+// в процесс-раннер, которому git не нужен.
+include(":vcs")
 include(":ui")
 include(":app:desktop")
 

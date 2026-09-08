@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 class ProtocolTest {
 
     @Test
-    fun `сообщение переживает запись и чтение`() {
+    fun `message survives write and read`() {
         val random = Random(42)
         val out = ByteArrayOutputStream()
         val sent = List(200) {
@@ -35,7 +35,7 @@ class ProtocolTest {
     }
 
     @Test
-    fun `читает сообщение из потока, отдающего байты по одному`() {
+    fun `reads message from stream yielding one byte at a time`() {
         // Сокет вправе отдать сколько угодно байт за раз. Наивное чтение здесь ломается.
         val out = ByteArrayOutputStream()
         val payload = Random(7).nextBytes(3000)
@@ -47,7 +47,7 @@ class ProtocolTest {
     }
 
     @Test
-    fun `обрыв посреди сообщения это ошибка, а не тишина`() {
+    fun `truncated message is an error not silence`() {
         val out = ByteArrayOutputStream()
         Wire.write(out, MessageType.Stdout, ByteArray(100))
         val truncated = out.toByteArray().copyOf(Wire.HEADER_SIZE + 40)
@@ -56,7 +56,7 @@ class ProtocolTest {
     }
 
     @Test
-    fun `мусор в заголовке распознаётся, а не превращается в гигабайтный буфер`() {
+    fun `garbage header is rejected not allocated`() {
         val garbage = byteArrayOf(0x7F, -1, -1, -1, 0x01)
         assertFailsWith<ProtocolException> { Wire.read(ByteArrayInputStream(garbage)) }
 
@@ -65,7 +65,7 @@ class ProtocolTest {
     }
 
     @Test
-    fun `коды типов не пересекаются и держатся в одном байте`() {
+    fun `message type codes are unique and fit one byte`() {
         // Тип едет одним байтом заголовка: пересечение кодов или выход за 0xFF
         // означает молча перепутанные сообщения, а не ошибку компиляции.
         val codes = MessageType.entries.map { it.code }
@@ -77,7 +77,7 @@ class ProtocolTest {
     }
 
     @Test
-    fun `слишком большой payload не отправляется`() {
+    fun `oversized payload is refused`() {
         assertFailsWith<IllegalArgumentException> {
             Wire.write(ByteArrayOutputStream(), MessageType.Stdout, ByteArray(Wire.MAX_PAYLOAD + 1))
         }

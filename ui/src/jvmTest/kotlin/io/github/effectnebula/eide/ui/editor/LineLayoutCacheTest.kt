@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 class LineLayoutCacheTest {
 
     @Test
-    fun `повторный запрос не считает заново`() {
+    fun `repeated lookup does not recompute`() {
         var computed = 0
         val cache = LineLayoutCache<Int>(capacity = 8)
 
@@ -19,7 +19,7 @@ class LineLayoutCacheTest {
     }
 
     @Test
-    fun `размер ограничен и не растёт бесконечно`() {
+    fun `size stays bounded`() {
         val capacity = 16
         val cache = LineLayoutCache<Int>(capacity)
 
@@ -30,7 +30,7 @@ class LineLayoutCacheTest {
     }
 
     @Test
-    fun `недавние строки переживают смену поколения`() {
+    fun `recent lines survive a generation swap`() {
         val capacity = 4
         val cache = LineLayoutCache<Int>(capacity)
 
@@ -46,7 +46,7 @@ class LineLayoutCacheTest {
     }
 
     @Test
-    fun `экран строк переживает прокрутку без пересчёта`() {
+    fun `a screenful survives scrolling without recompute`() {
         // Сценарий ради которого кэш существует: пятьдесят видимых строк,
         // прокрутка туда и обратно в пределах одного экрана.
         val visible = (0 until 50).map { "line $it" }
@@ -62,7 +62,7 @@ class LineLayoutCacheTest {
     }
 
     @Test
-    fun `очистка сбрасывает и содержимое, и счётчики`() {
+    fun `clear resets content and counters`() {
         val cache = LineLayoutCache<Int>()
         cache.get("a") { 1 }
         cache.get("a") { 1 }

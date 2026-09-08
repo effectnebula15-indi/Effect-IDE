@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 class DocumentTest {
 
     @Test
-    fun `правка меняет текст и версию`() {
+    fun `edit changes text and version`() {
         val document = Document(Rope.of("привет"))
         val change = document.apply(EditTransaction.insert(6, ", мир"))
 
@@ -19,7 +19,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `пустая правка ничего не делает`() {
+    fun `empty edit does nothing`() {
         val document = Document(Rope.of("текст"))
         assertNull(document.apply(EditTransaction(emptyList())))
         assertEquals(0, document.version)
@@ -27,7 +27,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `подряд набранное слово откатывается одним undo`() {
+    fun `typed word undoes in one step`() {
         val document = Document()
         var at = 0L
         for (letter in "привет") {
@@ -43,7 +43,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `пауза в наборе разрывает группу`() {
+    fun `pause in typing breaks the group`() {
         val document = Document()
         document.apply(EditTransaction.insert(0, "abc"), EditKind.Typing, 0)
         // Пауза длиннее окна группировки — это уже другое действие.
@@ -57,7 +57,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `набор в другом месте не приклеивается к предыдущему`() {
+    fun `typing elsewhere starts a new group`() {
         val document = Document(Rope.of("aaaa bbbb"))
         document.apply(EditTransaction.insert(4, "X"), EditKind.Typing, 0)
         // Курсор переехал: та же секунда, тот же характер, но другое место.
@@ -68,7 +68,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `вставка из буфера не группируется никогда`() {
+    fun `paste never groups`() {
         val document = Document()
         document.apply(EditTransaction.insert(0, "один"), EditKind.Other, 0)
         document.apply(EditTransaction.insert(4, "два"), EditKind.Other, 10)
@@ -78,7 +78,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `undo и redo возвращают текст туда и обратно`() {
+    fun `undo and redo round trip`() {
         val document = Document(Rope.of("начало"))
         document.apply(EditTransaction.insert(6, " и продолжение"))
         val afterEdit = document.text.toString()
@@ -92,7 +92,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `новая правка стирает историю redo`() {
+    fun `new edit clears redo history`() {
         val document = Document(Rope.of("текст"))
         document.apply(EditTransaction.insert(5, " один"))
         document.undo()
@@ -105,7 +105,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `множественная правка откатывается целиком`() {
+    fun `multi caret edit undoes as a whole`() {
         val document = Document(Rope.of("aaaaabbbbbccccc"))
         document.apply(
             EditTransaction.of(
@@ -122,7 +122,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `откат на пустой истории безопасен`() {
+    fun `undo on empty history is safe`() {
         val document = Document(Rope.of("текст"))
         assertNull(document.undo())
         assertNull(document.redo())
@@ -130,7 +130,7 @@ class DocumentTest {
     }
 
     @Test
-    fun `длинная случайная история сходится обратно к началу`() {
+    fun `long random history unwinds to the original text`() {
         val document = Document(Rope.of("старт"))
         val random = kotlin.random.Random(11)
         var at = 0L

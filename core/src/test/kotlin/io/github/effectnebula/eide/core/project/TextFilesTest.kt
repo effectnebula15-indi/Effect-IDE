@@ -12,7 +12,7 @@ class TextFilesTest {
     // --- кодировки -------------------------------------------------------------
 
     @Test
-    fun `обычный utf-8 читается как есть`() {
+    fun `plain utf 8 is read as is`() {
         val loaded = TextFiles.decode("привет\nмир\n".toByteArray(Charsets.UTF_8))
 
         assertEquals("привет\nмир\n", loaded.text.toString())
@@ -22,7 +22,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `метка порядка байтов не попадает в текст и не теряется при записи`() {
+    fun `byte order mark stays out of text and survives writing`() {
         // BOM в тексте — это невидимый символ в начале файла, который потом
         // ломает шебанг, JSON-парсеры и сравнение строк.
         val bytes = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) +
@@ -37,7 +37,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `utf-16 распознаётся по метке`() {
+    fun `utf 16 is detected by its byte order mark`() {
         val bytes = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) +
             "тест\n".toByteArray(Charsets.UTF_16LE)
 
@@ -47,7 +47,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `неразбираемая кодировка не портит текст молча`() {
+    fun `undecodable file is not silently mangled`() {
         // Байты cp1251. Подставить символ замены значило бы: пользователь
         // сохранит файл и потеряет данные, ничего не заметив.
         val cp1251 = byteArrayOf(0xEF.toByte(), 0xF0.toByte(), 0xE8.toByte(), 0xE2.toByte())
@@ -59,7 +59,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `utf-16 не принимается за бинарный файл`() {
+    fun `utf 16 is not mistaken for a binary file`() {
         // Регрессия: в UTF-16 нулевые байты это норма — старший байт латиницы и
         // переноса строки как раз нулевой. Наивная проверка на нули объявляла
         // двоичным любой текст в этой кодировке.
@@ -73,7 +73,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `бинарный файл распознаётся по нулевым байтам`() {
+    fun `binary file is detected by null bytes`() {
         val bytes = "начало".toByteArray() + byteArrayOf(0, 1, 2) + "конец".toByteArray()
 
         assertEquals(ReadOnlyReason.Binary, TextFiles.decode(bytes).readOnlyReason)
@@ -82,7 +82,7 @@ class TextFilesTest {
     // --- переносы строк --------------------------------------------------------
 
     @Test
-    fun `виндовые переносы внутри редактора становятся обычными`() {
+    fun `windows line endings are normalised inside the editor`() {
         val loaded = TextFiles.decode("одна\r\nдве\r\n".toByteArray())
 
         assertEquals("одна\nдве\n", loaded.text.toString(), "\\r просочился в текст")
@@ -91,7 +91,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `виндовые переносы возвращаются при записи`() {
+    fun `windows line endings are restored on write`() {
         val loaded = TextFiles.decode("одна\r\nдве\r\n".toByteArray())
         val written = String(TextFiles.encode(loaded.text, loaded.format))
 
@@ -99,7 +99,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `старые маковские переносы тоже узнаются`() {
+    fun `classic mac line endings are recognised`() {
         val loaded = TextFiles.decode("одна\rдве\r".toByteArray())
 
         assertEquals("одна\nдве\n", loaded.text.toString())
@@ -107,7 +107,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `в смешанном файле побеждает первый встреченный перенос`() {
+    fun `first line ending wins in a mixed file`() {
         val loaded = TextFiles.decode("одна\r\nдве\nтри\n".toByteArray())
 
         assertEquals(LineEnding.CrLf, loaded.format.lineEnding)
@@ -117,7 +117,7 @@ class TextFilesTest {
     // --- перенос в конце файла -------------------------------------------------
 
     @Test
-    fun `файл без переноса в конце таким и остаётся`() {
+    fun `file without trailing newline keeps it that way`() {
         // Дописать перенос — значит получить дифф на файл, который не трогали.
         val loaded = TextFiles.decode("без переноса".toByteArray())
         assertEquals(false, loaded.format.endsWithNewline)
@@ -127,7 +127,7 @@ class TextFilesTest {
     }
 
     @Test
-    fun `файл с переносом в конце сохраняет ровно один`() {
+    fun `file with trailing newline keeps exactly one`() {
         val loaded = TextFiles.decode("строка\n".toByteArray())
         assertTrue(loaded.format.endsWithNewline)
 
@@ -139,7 +139,7 @@ class TextFilesTest {
     // --- размер ----------------------------------------------------------------
 
     @Test
-    fun `слишком большой файл открывается только на чтение, но открывается`() {
+    fun `oversized file opens read only but opens`() {
         val loaded = TextFiles.decode("текст\n".toByteArray(), tooLarge = true)
 
         assertEquals(ReadOnlyReason.TooLarge, loaded.readOnlyReason)
@@ -149,7 +149,7 @@ class TextFilesTest {
     // --- полный оборот через диск ---------------------------------------------
 
     @Test
-    fun `оборот через файловую систему не меняет байты`() {
+    fun `round trip through the file system keeps bytes`() {
         val cases = mapOf(
             "unix" to "первая\nвторая\n",
             "windows" to "первая\r\nвторая\r\n",

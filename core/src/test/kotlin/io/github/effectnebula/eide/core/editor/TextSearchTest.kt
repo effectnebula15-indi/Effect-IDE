@@ -17,21 +17,21 @@ class TextSearchTest {
     ) = TextSearch(SearchQuery(pattern, isRegex, caseSensitive, wholeWord))
 
     @Test
-    fun `обычный поиск не считает спецсимволы регулярным выражением`() {
+    fun `literal search does not treat specials as regex`() {
         val text = Rope.of("цена 1+1 и 1+1 рублей")
         val matches = search("1+1").findAll(text).toList()
         assertEquals(2, matches.size, "поиск литерала сломался о плюс")
     }
 
     @Test
-    fun `регистронезависимость по умолчанию`() {
+    fun `search ignores case by default`() {
         val text = Rope.of("Привет привет ПРИВЕТ")
         assertEquals(3, search("привет").findAll(text).count())
         assertEquals(1, search("привет", caseSensitive = true).findAll(text).count())
     }
 
     @Test
-    fun `слово целиком работает с кириллицей`() {
+    fun `whole word search works with cyrillic`() {
         // \b в Java опирается на \w, куда кириллица не входит: наивная реализация
         // не нашла бы здесь ничего.
         val text = Rope.of("шаг шаги подшаг шаг")
@@ -42,7 +42,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `совпадение через границу чанка находится`() {
+    fun `match across a chunk boundary is found`() {
         // Rope режет текст на листья по MAX_LEAF символов. Совпадение, лежащее
         // на стыке, — первое, что ломается при наивной работе с деревом.
         val filler = "x".repeat(Rope.MAX_LEAF - 3)
@@ -54,7 +54,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `совпадений много и все на месте в большом документе`() {
+    fun `all matches are found in a large document`() {
         val block = "строка без совпадения\nздесь ЦЕЛЬ внутри\n"
         val text = Rope.of(block.repeat(500))
 
@@ -67,7 +67,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `группы регулярного выражения доступны`() {
+    fun `regex groups are exposed`() {
         val text = Rope.of("def foo(): pass\ndef bar(): pass")
         val matches = search("""def (\w+)\(""", isRegex = true).findAll(text).toList()
 
@@ -75,7 +75,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `замена подставляет группы`() {
+    fun `replacement expands groups`() {
         val text = Rope.of("def foo():\ndef bar():")
         val edit = search("""def (\w+)\(""", isRegex = true).replaceAll(text, "fun $1(")
 
@@ -83,7 +83,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `при обычном поиске доллар в замене остаётся долларом`() {
+    fun `dollar stays literal in non regex replacement`() {
         // Иначе замена «на $1 рубль» молча превратилась бы в ссылку на группу.
         val text = Rope.of("цена X")
         val edit = search("X").replaceAll(text, "$1 рубль")
@@ -92,7 +92,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `замена всех совпадений это одна корректная транзакция`() {
+    fun `replace all is one valid transaction`() {
         val text = Rope.of("aXbXcXd")
         val edit = search("X").replaceAll(text, "___")
 
@@ -101,7 +101,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `поиск вперёд оборачивается по кругу`() {
+    fun `forward search wraps around`() {
         val text = Rope.of("цель ... цель")
         val engine = search("цель")
 
@@ -111,7 +111,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `поиск назад находит предыдущее совпадение`() {
+    fun `backward search finds the previous match`() {
         val text = Rope.of("цель ... цель ... цель")
         val engine = search("цель")
 
@@ -122,7 +122,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `битое регулярное выражение не роняет поиск`() {
+    fun `broken regex does not crash search`() {
         val engine = search("(незакрытая скобка", isRegex = true)
 
         assertNull(engine.regex)
@@ -131,7 +131,7 @@ class TextSearchTest {
     }
 
     @Test
-    fun `пустой запрос ничего не находит`() {
+    fun `empty query finds nothing`() {
         val engine = search("")
         assertNull(engine.regex)
         assertNull(engine.error, "пустой запрос это не ошибка")

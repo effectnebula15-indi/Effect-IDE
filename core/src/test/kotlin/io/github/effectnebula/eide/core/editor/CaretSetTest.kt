@@ -9,13 +9,13 @@ import kotlin.test.assertFailsWith
 class CaretSetTest {
 
     @Test
-    fun `курсоры упорядочиваются`() {
+    fun `carets are ordered`() {
         val set = CaretSet.of(listOf(Caret(10), Caret(2), Caret(7)))
         assertEquals(listOf(2, 7, 10), set.carets.map { it.head })
     }
 
     @Test
-    fun `наехавшие друг на друга курсоры сливаются`() {
+    fun `overlapping carets merge`() {
         // Иначе набор текста продублируется, а выделения станут неразличимы.
         val set = CaretSet.of(listOf(Caret(0, 5), Caret(3, 8)))
         assertEquals(1, set.carets.size)
@@ -24,18 +24,18 @@ class CaretSetTest {
     }
 
     @Test
-    fun `соприкасающиеся курсоры тоже сливаются`() {
+    fun `touching carets merge too`() {
         val set = CaretSet.of(listOf(Caret(0, 3), Caret(3, 6)))
         assertEquals(1, set.carets.size)
     }
 
     @Test
-    fun `пустой набор невозможен`() {
+    fun `empty caret set is refused`() {
         assertFailsWith<IllegalArgumentException> { CaretSet.of(emptyList()) }
     }
 
     @Test
-    fun `набор текста во всех курсорах даёт одну транзакцию`() {
+    fun `typing at every caret yields one transaction`() {
         val set = CaretSet.of(listOf(Caret(0), Caret(5), Caret(10)))
         val edit = set.typing(">")
 
@@ -43,14 +43,14 @@ class CaretSetTest {
     }
 
     @Test
-    fun `набор поверх выделений заменяет их`() {
+    fun `typing over selections replaces them`() {
         val set = CaretSet.of(listOf(Caret(0, 3), Caret(6, 9)))
         val edit = set.typing("X")
         assertEquals("XdefX", edit.applyTo(Rope.of("abcdefghi")).toString())
     }
 
     @Test
-    fun `курсоры переносятся через правку`() {
+    fun `carets are mapped through an edit`() {
         val set = CaretSet.of(listOf(Caret(0), Caret(5), Caret(10)))
         val edit = EditTransaction.insert(0, "###")
 
@@ -60,7 +60,7 @@ class CaretSetTest {
     }
 
     @Test
-    fun `после набора курсор стоит за набранным символом`() {
+    fun `caret ends up after the typed character`() {
         // Регрессия: раньше вставка ровно в позицию курсора его не двигала, и
         // каждая нажатая клавиша отталкивала курсор назад.
         var carets = CaretSet.of(listOf(Caret(3)))
@@ -77,7 +77,7 @@ class CaretSetTest {
     }
 
     @Test
-    fun `набор в нескольких курсорах не сбивает их порядок`() {
+    fun `typing at several carets keeps their order`() {
         var carets = CaretSet.of(listOf(Caret(0), Caret(3), Caret(6)))
         var text = Rope.of("aaabbbccc")
 
@@ -92,7 +92,7 @@ class CaretSetTest {
     }
 
     @Test
-    fun `курсоры, схлопнувшиеся в одну точку после правки, сливаются`() {
+    fun `carets collapsed to one point by an edit merge`() {
         // Удаляем всё между двумя курсорами: они оказываются в одном месте,
         // и дальше должны вести себя как один.
         val set = CaretSet.of(listOf(Caret(2), Caret(8)))

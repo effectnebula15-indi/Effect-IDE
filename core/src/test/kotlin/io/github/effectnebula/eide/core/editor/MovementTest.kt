@@ -31,20 +31,20 @@ class MovementTest {
     private fun movement(text: String) = Movement(Rope.of(text), SurrogateAwareBreaker)
 
     @Test
-    fun `шаг вправо переходит на следующую строку через перенос`() {
+    fun `right step crosses the line break`() {
         val m = movement("ab\ncd")
         // Офсет 2 — конец первой строки, перед '\n'.
         assertEquals(3, m.right(Caret(2), keepSelection = false).head)
     }
 
     @Test
-    fun `шаг влево переходит в конец предыдущей строки`() {
+    fun `left step lands at end of previous line`() {
         val m = movement("ab\ncd")
         assertEquals(2, m.left(Caret(3), keepSelection = false).head)
     }
 
     @Test
-    fun `шаг не встаёт посреди суррогатной пары`() {
+    fun `step never lands inside a surrogate pair`() {
         val m = movement("a😀b")
         val afterEmoji = m.right(m.right(Caret(0), false), false)
         assertEquals(3, afterEmoji.head, "курсор встал посреди пары")
@@ -52,7 +52,7 @@ class MovementTest {
     }
 
     @Test
-    fun `шаг вправо при выделении схлопывает его к правому краю`() {
+    fun `right step collapses selection to its right edge`() {
         val m = movement("abcdef")
         val selected = Caret(anchor = 1, head = 4)
         assertEquals(4, m.right(selected, keepSelection = false).head)
@@ -60,7 +60,7 @@ class MovementTest {
     }
 
     @Test
-    fun `движение по словам не считает подчёркивание разделителем`() {
+    fun `word motion treats underscore as part of the word`() {
         val m = movement("some_name other")
         assertEquals(9, m.wordRight(Caret(0), false).head, "some_name должно быть одним словом")
         assertEquals(15, m.wordRight(Caret(9), false).head)
@@ -69,7 +69,7 @@ class MovementTest {
     }
 
     @Test
-    fun `home сначала к тексту, потом к началу строки`() {
+    fun `home goes to text first then to line start`() {
         val m = movement("    отступ")
         val atText = m.lineStart(Caret(10), false)
         assertEquals(4, atText.head, "первый Home должен встать перед текстом")
@@ -79,7 +79,7 @@ class MovementTest {
     }
 
     @Test
-    fun `вертикальное движение помнит колонку через короткую строку`() {
+    fun `vertical motion remembers column across a short line`() {
         // Классическая ошибка: пройти вниз через короткую строку и вернуться
         // вверх — курсор должен оказаться там же, откуда ушёл.
         val m = movement("длинная строка\nкор\nдлинная строка")
@@ -96,25 +96,25 @@ class MovementTest {
     }
 
     @Test
-    fun `движение вверх с первой строки уходит в начало документа`() {
+    fun `up from first line goes to document start`() {
         val m = movement("abc\ndef")
         assertEquals(0, m.up(Caret(2), false).head)
     }
 
     @Test
-    fun `движение вниз с последней строки уходит в конец документа`() {
+    fun `down from last line goes to document end`() {
         val m = movement("abc\ndef")
         assertEquals(7, m.down(Caret(5), false).head)
     }
 
     @Test
-    fun `end встаёт перед переносом, а не после`() {
+    fun `end stops before the line break`() {
         val m = movement("abc\ndef")
         assertEquals(3, m.lineEnd(Caret(1), false).head)
     }
 
     @Test
-    fun `с зажатым shift якорь не двигается`() {
+    fun `anchor stays put while extending selection`() {
         val m = movement("abcdef")
         val moved = m.right(m.right(Caret(2), keepSelection = true), keepSelection = true)
         assertEquals(2, moved.anchor)

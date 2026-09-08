@@ -7,7 +7,7 @@ import kotlin.test.assertEquals
 class RopeCharSequenceTest {
 
     @Test
-    fun `совпадает со строкой при последовательном чтении`() {
+    fun `matches the string on sequential reads`() {
         val text = buildString { repeat(20_000) { append(('a' + it % 26)) } }
         val view = Rope.of(text).asCharSequence(windowSize = 64)
 
@@ -16,7 +16,7 @@ class RopeCharSequenceTest {
     }
 
     @Test
-    fun `совпадает со строкой при случайном порядке чтения`() {
+    fun `matches the string on random access`() {
         // Движок регулярных выражений ходит по строке не только вперёд:
         // окно обязано переживать прыжки назад.
         val text = buildString { repeat(10_000) { append(('a' + it % 26)) } }
@@ -30,7 +30,7 @@ class RopeCharSequenceTest {
     }
 
     @Test
-    fun `срез совпадает со строкой`() {
+    fun `subsequence matches the string`() {
         val text = buildString { repeat(5_000) { append(('a' + it % 26)) } }
         val view = Rope.of(text).asCharSequence(windowSize = 100)
         val random = Random(9)

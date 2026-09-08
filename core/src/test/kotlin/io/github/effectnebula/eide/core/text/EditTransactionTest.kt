@@ -8,20 +8,20 @@ import kotlin.test.assertFailsWith
 class EditTransactionTest {
 
     @Test
-    fun `пересекающиеся замены не принимаются`() {
+    fun `overlapping replacements are refused`() {
         assertFailsWith<IllegalArgumentException> {
             EditTransaction.of(Replacement(0, 5, "a"), Replacement(3, 8, "b"))
         }
     }
 
     @Test
-    fun `соседние замены допустимы`() {
+    fun `adjacent replacements are allowed`() {
         val edit = EditTransaction.of(Replacement(0, 3, "X"), Replacement(3, 6, "Y"))
         assertEquals("XYghi", edit.applyTo(Rope.of("abcdefghi")).toString())
     }
 
     @Test
-    fun `множественная правка применяется целиком`() {
+    fun `multi caret edit applies as a whole`() {
         // Множественные курсоры: три вставки за одно действие. Если применять их
         // по очереди без пересчёта офсетов, вторая и третья попадут не туда.
         val edit = EditTransaction.of(
@@ -33,7 +33,7 @@ class EditTransactionTest {
     }
 
     @Test
-    fun `обратная правка возвращает исходный текст`() {
+    fun `inverse edit restores original text`() {
         val random = Random(2024)
         repeat(200) { seed ->
             val before = Rope.of(randomText(Random(seed), random.nextInt(1, 400)))
@@ -47,7 +47,7 @@ class EditTransactionTest {
     }
 
     @Test
-    fun `перенос офсета согласован с текстом`() {
+    fun `offset mapping stays inside text`() {
         // Ставим маркер в текст, применяем правку и проверяем, что офсет,
         // перенесённый через mapOffset, указывает туда же, куда уехал маркер.
         val random = Random(7)

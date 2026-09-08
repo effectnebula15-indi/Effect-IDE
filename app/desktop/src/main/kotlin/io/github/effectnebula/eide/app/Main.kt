@@ -5,6 +5,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkDocument
 import kotlin.system.exitProcess
@@ -17,6 +18,9 @@ import kotlin.system.exitProcess
  * правило «сначала десктоп, потом Android» существует ровно поэтому.
  */
 fun main() = application {
+    // Ошибка окружения, которую иначе замечают только по испорченным именам файлов.
+    DesktopEnvironment.fileNameWarning()?.let { System.err.println("ВНИМАНИЕ: $it") }
+
     val document = benchmarkDocument()
 
     // Прогон без человека: -Deide.benchmarkSeconds=15 печатает счётчики в вывод

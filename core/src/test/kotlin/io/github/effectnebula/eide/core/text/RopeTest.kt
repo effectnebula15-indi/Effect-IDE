@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
 class RopeTest {
 
     @Test
-    fun `пустой rope`() {
+    fun `empty rope`() {
         assertEquals(0, Rope.EMPTY.length)
         assertEquals(1, Rope.EMPTY.lineCount)
         assertEquals("", Rope.EMPTY.toString())
@@ -24,7 +24,7 @@ class RopeTest {
     }
 
     @Test
-    fun `отдаёт исходный текст любой длины`() {
+    fun `returns original text of any size`() {
         for (size in intArrayOf(0, 1, 100, Rope.MAX_LEAF - 1, Rope.MAX_LEAF, Rope.MAX_LEAF + 1, 100_000)) {
             val text = randomText(Random(size), size)
             assertEquals(text, Rope.of(text).toString(), "размер $size")
@@ -32,7 +32,7 @@ class RopeTest {
     }
 
     @Test
-    fun `случайные правки совпадают с эталонной моделью`() {
+    fun `random edits match reference model`() {
         repeat(20) { seed ->
             val random = Random(seed)
             var rope = Rope.of(randomText(random, 2_000))
@@ -70,7 +70,7 @@ class RopeTest {
     }
 
     @Test
-    fun `дерево остаётся сбалансированным при вставке в конец`() {
+    fun `tree stays balanced on append`() {
         // Худший случай для наивной склейки: дерево вырождается в список.
         var rope = Rope.EMPTY
         repeat(5_000) { rope = rope.insert(rope.length, "x") }
@@ -82,7 +82,7 @@ class RopeTest {
     }
 
     @Test
-    fun `substring и appendTo совпадают с моделью`() {
+    fun `substring matches reference model`() {
         val random = Random(1234)
         val text = randomText(random, 20_000)
         val rope = Rope.of(text)
@@ -95,14 +95,14 @@ class RopeTest {
     }
 
     @Test
-    fun `charAt совпадает с моделью`() {
+    fun `charAt matches reference model`() {
         val text = randomText(Random(7), 5_000)
         val rope = Rope.of(text)
         for (i in text.indices) assertEquals(text[i], rope.charAt(i), "символ $i")
     }
 
     @Test
-    fun `строки и офсеты совпадают с моделью`() {
+    fun `line offsets match reference model`() {
         val random = Random(99)
         val text = randomText(random, 30_000)
         val rope = Rope.of(text)
@@ -122,7 +122,7 @@ class RopeTest {
     }
 
     @Test
-    fun `lineEnd отбрасывает перенос и предшествующий возврат каретки`() {
+    fun `lineEnd drops newline and preceding carriage return`() {
         val rope = Rope.of("aaa\r\nbb\nccc")
         assertEquals(3, rope.lineEnd(0)) // до '\r'
         assertEquals(7, rope.lineEnd(1)) // до '\n'
@@ -133,7 +133,7 @@ class RopeTest {
     }
 
     @Test
-    fun `суррогатные пары не разрываются при нарезке на листья`() {
+    fun `surrogate pairs survive chunking`() {
         // Одна эмодзи — две UTF-16 code unit. Нарезка на чанки не должна их разделять.
         val emoji = "😀" // 😀
         val text = emoji.repeat(5_000)
@@ -159,7 +159,7 @@ class RopeTest {
     }
 
     @Test
-    fun `выход за границы это ошибка вызывающего`() {
+    fun `out of bounds is a caller error`() {
         val rope = Rope.of("abc")
         assertFailsWith<IllegalArgumentException> { rope.charAt(3) }
         assertFailsWith<IllegalArgumentException> { rope.insert(4, "x") }
