@@ -30,10 +30,16 @@ class AndroidPythonBackend(private val context: Context) {
         fun onFailure(error: Throwable)
     }
 
+    /**
+     * [canvas] — область кадров графики или `null`, если программа запускается
+     * без неё. Владеет областью вызывающий: она переживает несколько запусков,
+     * а раннер одноразовый.
+     */
     fun run(
         script: File,
         workDir: File,
         limits: RunLimits = RunLimits(),
+        canvas: CanvasArea? = null,
         listener: Listener,
     ): Handle {
         val pair = ParcelFileDescriptor.createSocketPair()
@@ -41,10 +47,15 @@ class AndroidPythonBackend(private val context: Context) {
         val theirs = pair[1]
 
         try {
-            context.startService(
-                Intent(context, PythonRunnerService::class.java)
-                    .putExtra(PythonRunnerService.EXTRA_CHANNEL, theirs)
-            )
+            val intent = Intent(context, PythonRunnerService::class.java)
+                .putExtra(PythonRunnerService.EXTRA_CHANNEL, theirs)
+            if (canvas != null) {
+                intent
+                    .putExtra(PythonRunnerService.EXTRA_CANVAS, canvas.shared)
+                    .putExtra(PythonRunnerService.EXTRA_CANVAS_WIDTH, canvas.width)
+                    .putExtra(PythonRunnerService.EXTRA_CANVAS_HEIGHT, canvas.height)
+            }
+            context.startService(intent)
         } finally {
             // Дескриптор продублирован в процесс раннера — наша копия больше не нужна.
             runCatching { theirs.close() }

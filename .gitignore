@@ -26,3 +26,7 @@ native/**/build/
 # Логи падений JVM
 hs_err_pid*.log
 replay_pid*.log
+
+# Кэш байткода Python рядом с шимом графики
+__pycache__/
+*.pyc

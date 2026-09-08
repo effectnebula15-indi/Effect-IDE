@@ -105,10 +105,37 @@ val canvasTsan = registerCanvasTest(
     "Кадровый буфер под ThreadSanitizer: писатель и читатель в двух потоках.",
 )
 
+// Питоновский шим графики уезжает в APK, но ctypes не знает, что он на
+// Android: та же библиотека собирается на хосте, и весь шим проверяется
+// обычным запуском. Иначе опечатка в порядке аргументов ловится только на
+// телефоне и выглядит как «просто не рисует».
+val canvasShim = tasks.register<Exec>("canvasShimTest") {
+    group = "verification"
+    description = "Шим eide.py против настоящей libeide_canvas.so."
+
+    val buildDir = layout.buildDirectory.dir("native-canvas/shim")
+    inputs.dir(canvasDir)
+    inputs.file(layout.projectDirectory.file("runner/android/src/main/python/eide.py"))
+    outputs.dir(buildDir)
+
+    // PYTHONDONTWRITEBYTECODE не для чистоты: инвалидация .pyc идёт по времени
+    // и размеру файла, и правка того же размера в ту же секунду остаётся
+    // невидимой. Один раз это уже стоило получаса разбирательств.
+    environment("PYTHONDONTWRITEBYTECODE", "1")
+    environment("LD_LIBRARY_PATH", buildDir.get().asFile.absolutePath)
+
+    commandLine(
+        "sh", "-c",
+        "cmake -S ${canvasDir.asFile} -B ${buildDir.get().asFile} -DCMAKE_BUILD_TYPE=Release && " +
+            "cmake --build ${buildDir.get().asFile} && " +
+            "python3 ${canvasDir.file("test/test_shim.py").asFile}"
+    )
+}
+
 tasks.register("checkNative") {
     group = "verification"
     description = "Все проверки нативного кода."
-    dependsOn(canvasAsan, canvasTsan)
+    dependsOn(canvasAsan, canvasTsan, canvasShim)
 }
 
 tasks.register("check") {

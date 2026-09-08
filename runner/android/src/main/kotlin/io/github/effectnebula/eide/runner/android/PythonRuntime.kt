@@ -13,6 +13,11 @@ internal object PythonRuntime {
         System.loadLibrary("eide_python")
     }
 
+    /**
+     * Параметры канвы передаются программе через окружение (`EIDE_CANVAS_*`).
+     * Нулевой адрес означает «графики нет» — тогда `eide.available()` вернёт
+     * ложь, и программа увидит это сама, а не упадёт на ровном месте.
+     */
     @JvmStatic
     external fun nativeRun(
         home: String,
@@ -20,5 +25,9 @@ internal object PythonRuntime {
         workDir: String,
         outFd: Int,
         errFd: Int,
+        canvasAddress: Long,
+        canvasSize: Long,
+        canvasWidth: Int,
+        canvasHeight: Int,
     ): Int
 }

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import android.os.SharedMemory
 import android.util.Log
 import io.github.effectnebula.eide.core.exec.MessageType
 import io.github.effectnebula.eide.core.exec.Wire
@@ -36,11 +37,26 @@ class PythonRunnerService : Service() {
             return START_NOT_STICKY
         }
 
-        Thread({ serve(channel) }, "eide-runner").start()
+        @Suppress("DEPRECATION")
+        val sharedCanvas = intent.getParcelableExtra<SharedMemory>(EXTRA_CANVAS)
+        val canvas = sharedCanvas?.let {
+            // Неудача подключения к канве не повод не запускать программу:
+            // консольный код от неё не зависит, а eide.available() честно
+            // скажет, что графики нет.
+            runCatching {
+                CanvasArea.attach(
+                    it,
+                    intent.getIntExtra(EXTRA_CANVAS_WIDTH, 0),
+                    intent.getIntExtra(EXTRA_CANVAS_HEIGHT, 0),
+                )
+            }.onFailure { error -> Log.e(TAG, "канва недоступна", error) }.getOrNull()
+        }
+
+        Thread({ serve(channel, canvas) }, "eide-runner").start()
         return START_NOT_STICKY
     }
 
-    private fun serve(channel: ParcelFileDescriptor) {
+    private fun serve(channel: ParcelFileDescriptor, canvas: CanvasArea?) {
         val writer = FrameWriter(FileOutputStream(channel.fileDescriptor))
         var exitCode = -1
         try {
@@ -48,7 +64,7 @@ class PythonRunnerService : Service() {
             // Отдаём свой pid сразу: пока программа не запущена, останавливать
             // нечего, а как только запустится — читать канал будет уже некому.
             writer.write(MessageType.Started, startedPayload())
-            exitCode = runScript(request, writer)
+            exitCode = runScript(request, writer, canvas)
         } catch (t: Throwable) {
             Log.e(TAG, "раннер упал", t)
             runCatching {
@@ -74,7 +90,7 @@ class PythonRunnerService : Service() {
         )
     }
 
-    private fun runScript(request: StartRequest, writer: FrameWriter): Int {
+    private fun runScript(request: StartRequest, writer: FrameWriter, canvas: CanvasArea?): Int {
         // Маркером распаковки служит время обновления пакета: любая пересборка
         // приложения — повод разложить stdlib заново.
         val stamp = packageManager.getPackageInfo(packageName, 0).lastUpdateTime.toString()
@@ -95,6 +111,10 @@ class PythonRunnerService : Service() {
                 workDir = request.workDir,
                 outFd = outPipe[1].fd,
                 errFd = errPipe[1].fd,
+                canvasAddress = canvas?.address() ?: 0L,
+                canvasSize = canvas?.let { CanvasArea.areaSize(it.width, it.height) } ?: 0L,
+                canvasWidth = canvas?.width ?: 0,
+                canvasHeight = canvas?.height ?: 0,
             )
         } finally {
             // Пока write-концы открыты, читающие потоки не увидят конца файла.
@@ -135,5 +155,10 @@ class PythonRunnerService : Service() {
         private const val PUMP_JOIN_TIMEOUT_MS = 2_000L
 
         const val EXTRA_CHANNEL: String = "io.github.effectnebula.eide.runner.CHANNEL"
+
+        /** Область кадров графики. `SharedMemory` — Parcelable, поэтому едет в Intent как есть. */
+        const val EXTRA_CANVAS: String = "io.github.effectnebula.eide.runner.CANVAS"
+        const val EXTRA_CANVAS_WIDTH: String = "io.github.effectnebula.eide.runner.CANVAS_W"
+        const val EXTRA_CANVAS_HEIGHT: String = "io.github.effectnebula.eide.runner.CANVAS_H"
     }
 }

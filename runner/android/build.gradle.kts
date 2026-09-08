@@ -62,6 +62,10 @@ abstract class StagePython : DefaultTask() {
     @get:InputDirectory abstract val prefix: DirectoryProperty
     @get:Input abstract val spec: Property<String> // "jniLibs" или "assets"
     @get:Input abstract val pythonXY: Property<String>
+
+    /** Наш собственный код на Python: шим графики и что появится дальше. */
+    @get:InputDirectory @get:Optional abstract val shim: DirectoryProperty
+
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @get:Inject abstract val fs: FileSystemOperations
@@ -82,12 +86,25 @@ abstract class StagePython : DefaultTask() {
             // Стандартная библиотека едет в assets и распаковывается при первом
             // запуске. Выкидываем то, чему на телефоне делать нечего: один только
             // test/ весит 37 МБ при бюджете APK в 60 МБ.
-            "assets" -> fs.sync {
-                from("$prefixDir/lib/python${pythonXY.get()}") {
-                    exclude("test/**", "idlelib/**", "ensurepip/**", "tkinter/**")
-                    exclude("pydoc_data/**", "turtledemo/**", "**/__pycache__/**")
+            "assets" -> {
+                fs.sync {
+                    from("$prefixDir/lib/python${pythonXY.get()}") {
+                        exclude("test/**", "idlelib/**", "ensurepip/**", "tkinter/**")
+                        exclude("pydoc_data/**", "turtledemo/**", "**/__pycache__/**")
+                    }
+                    into(outputDir.get().asFile.resolve("python/lib/python${pythonXY.get()}"))
                 }
-                into(outputDir.get().asFile.resolve("python/lib/python${pythonXY.get()}"))
+                // site-packages — место, куда официальная документация CPython
+                // велит класть свой код. Копируем после sync: тот чистит каталог.
+                if (shim.isPresent) {
+                    fs.copy {
+                        from(shim.get().asFile) { include("*.py") }
+                        into(
+                            outputDir.get().asFile
+                                .resolve("python/lib/python${pythonXY.get()}/site-packages")
+                        )
+                    }
+                }
             }
             else -> error("неизвестная часть: ${spec.get()}")
         }
@@ -125,6 +142,7 @@ val stagePythonAssets = tasks.register<StagePython>("stagePythonAssets") {
     prefix.set(pythonPrefix)
     spec.set("assets")
     pythonXY.set(pyXY)
+    shim.set(layout.projectDirectory.dir("src/main/python"))
     dependsOn(unpackPython)
 }
 

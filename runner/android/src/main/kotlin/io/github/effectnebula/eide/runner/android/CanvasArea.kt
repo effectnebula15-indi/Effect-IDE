@@ -93,6 +93,9 @@ class CanvasArea private constructor(
         fun attach(shared: SharedMemory, width: Int, height: Int): CanvasArea =
             CanvasArea(shared, shared.mapReadWrite(), width, height)
 
+        /** Размер области в байтах — его же получает Python, чтобы проверить границы. */
+        fun areaSize(width: Int, height: Int): Long = nativeAreaSize(width, height)
+
         @JvmStatic private external fun nativeAreaSize(width: Int, height: Int): Long
         @JvmStatic private external fun nativeInitArea(area: ByteBuffer, width: Int, height: Int): Boolean
         @JvmStatic private external fun nativeAddressOf(area: ByteBuffer): Long

@@ -12,6 +12,7 @@
 #include <jni.h>
 #include <Python.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -45,7 +46,8 @@ JNIEXPORT jint JNICALL
 Java_io_github_effectnebula_eide_runner_android_PythonRuntime_nativeRun(
     JNIEnv *env, jclass clazz,
     jstring home, jstring script, jstring workDir,
-    jint out_fd, jint err_fd
+    jint out_fd, jint err_fd,
+    jlong canvas_address, jlong canvas_size, jint canvas_width, jint canvas_height
 ) {
     (void)clazz;
 
@@ -65,6 +67,22 @@ Java_io_github_effectnebula_eide_runner_android_PythonRuntime_nativeRun(
     // говорит, что изоляции ФС здесь нет), а лишь разумный умолчательный cwd.
     if (chdir(work_utf8) != 0) {
         LOGE("chdir(%s): %s", work_utf8, strerror(errno));
+    }
+
+    // Канва передаётся через окружение, а не аргументами скрипта: аргументы
+    // принадлежат пользовательской программе, и занимать их служебным нельзя.
+    // Адрес — потому что отображением занимается Kotlin, а шим на ctypes умеет
+    // работать только с числом.
+    if (canvas_address != 0) {
+        char value[32];
+        snprintf(value, sizeof(value), "%lld", (long long)canvas_address);
+        setenv("EIDE_CANVAS_ADDR", value, 1);
+        snprintf(value, sizeof(value), "%lld", (long long)canvas_size);
+        setenv("EIDE_CANVAS_SIZE", value, 1);
+        snprintf(value, sizeof(value), "%d", (int)canvas_width);
+        setenv("EIDE_CANVAS_W", value, 1);
+        snprintf(value, sizeof(value), "%d", (int)canvas_height);
+        setenv("EIDE_CANVAS_H", value, 1);
     }
 
     PyConfig config;
