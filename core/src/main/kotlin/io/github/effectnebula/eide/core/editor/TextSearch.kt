@@ -76,10 +76,40 @@ class TextSearch(private val query: SearchQuery) {
     fun replaceAll(text: Rope, replacement: String, asTemplate: Boolean = query.isRegex): EditTransaction {
         val compiled = regex ?: return EditTransaction(emptyList())
         val replacements = compiled.findAll(text.asCharSequence()).map { match ->
-            val newText = if (asTemplate) expandTemplate(replacement, match) else replacement
-            Replacement(match.range.first, match.range.last + 1, newText)
+            val found = match.toMatch()
+            val newText = if (asTemplate) expand(replacement, found) else replacement
+            Replacement(found.start, found.end, newText)
         }.toList()
         return EditTransaction(replacements)
+    }
+
+    /**
+     * Подставляет `$1`..`$9` из совпадения.
+     *
+     * **Осторожно с нумерацией.** В [SearchMatch.groups] нулевой группы нет —
+     * там только скобочные, — а `$1` в тексте замены означает первую скобочную.
+     * Значит `$N` это `groups[N - 1]`, и это ровно то место, где ошибка на
+     * единицу даёт пустую строку вместо найденного текста.
+     *
+     * Единственная реализация подстановки: в замене одного совпадения и в
+     * замене всех она обязана вести себя одинаково.
+     */
+    fun expand(replacement: String, match: SearchMatch): String = buildString {
+        var i = 0
+        while (i < replacement.length) {
+            val char = replacement[i]
+            if (char != '$' || i + 1 >= replacement.length || !replacement[i + 1].isDigit()) {
+                append(char)
+                i++
+                continue
+            }
+
+            var j = i + 1
+            while (j < replacement.length && replacement[j].isDigit()) j++
+            val number = replacement.substring(i + 1, j).toInt()
+            if (number >= 1) append(match.groups.getOrNull(number - 1).orEmpty())
+            i = j
+        }
     }
 
     private fun MatchResult.toMatch(): SearchMatch =
@@ -100,29 +130,32 @@ class TextSearch(private val query: SearchQuery) {
         const val WORD_BEFORE = "(?<![\\p{L}\\p{N}_])"
         const val WORD_AFTER = "(?![\\p{L}\\p{N}_])"
 
+        /**
+         * Юникодные классы символов.
+         *
+         * Без этого флага `\w`, `\d`, `\b` в выражении пользователя не видят
+         * кириллицу: поиск `имя: (\w+)` по русскому тексту не находит ничего.
+         * Человек пишет такое выражение, зная Python, где `re` работает
+         * наоборот, и объяснить ему пустой результат нечем.
+         *
+         * Чего этот флаг **не** чинит, вопреки первому впечатлению: поиск без
+         * учёта регистра по кириллице работает и без него — проверено. Ошибочный
+         * вывод получился из-за пробы на Java, скомпилированной с неверной
+         * кодировкой исходника: «ШАГ» и «Шаг» там превратились в разный мусор.
+         * Ровно та же ловушка, что с именами файлов (см. `CLAUDE.md`).
+         *
+         * Цена флага: выражения ведут себя не так, как в `grep` по умолчанию.
+         * Это скорее польза — так же ведёт себя `re` в Python.
+         */
+        const val UNICODE = "(?U)"
+
         fun buildRegex(query: SearchQuery): Regex? {
             if (query.isEmpty) return null
             val body = if (query.isRegex) query.pattern else Regex.escape(query.pattern)
-            val pattern = if (query.wholeWord) "$WORD_BEFORE(?:$body)$WORD_AFTER" else body
+            val bounded = if (query.wholeWord) "$WORD_BEFORE(?:$body)$WORD_AFTER" else body
             val options = if (query.caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
-            return runCatching { Regex(pattern, options) }.getOrNull()
+            return runCatching { Regex(UNICODE + bounded, options) }.getOrNull()
         }
 
-        fun expandTemplate(template: String, match: MatchResult): String = buildString {
-            var i = 0
-            while (i < template.length) {
-                val c = template[i]
-                if (c == '$' && i + 1 < template.length && template[i + 1].isDigit()) {
-                    var j = i + 1
-                    while (j < template.length && template[j].isDigit()) j++
-                    val group = template.substring(i + 1, j).toInt()
-                    append(match.groupValues.getOrNull(group).orEmpty())
-                    i = j
-                } else {
-                    append(c)
-                    i++
-                }
-            }
-        }
     }
 }
