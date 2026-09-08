@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +41,7 @@ import io.github.effectnebula.eide.core.project.TextFiles
 import io.github.effectnebula.eide.core.text.Document
 import io.github.effectnebula.eide.platform.android.IcuGraphemeBreaker
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
+import io.github.effectnebula.eide.runner.android.CanvasArea
 import io.github.effectnebula.eide.runner.android.KillReason
 import io.github.effectnebula.eide.runner.android.RunLimits
 import io.github.effectnebula.eide.ui.EditorScreen
@@ -91,6 +93,20 @@ private enum class Screen { Code, Render }
 private fun App() {
     var screen by remember { mutableStateOf(Screen.Code) }
 
+    // Область кадров переживает несколько запусков: раннер одноразовый, а
+    // канва — нет. Создаётся один раз на всё приложение.
+    val canvas = remember { runCatching { CanvasArea.create() }.getOrNull() }
+    DisposableEffect(canvas) { onDispose { canvas?.close() } }
+
+    var showCanvas by remember { mutableStateOf(false) }
+
+    if (showCanvas && canvas != null) {
+        // Полный экран без вкладок и без системных отступов: графика занимает
+        // всё, свайп возвращает к коду, программа продолжает работать.
+        CanvasScreen(canvas, onBack = { showCanvas = false })
+        return
+    }
+
     Column(Modifier.fillMaxSize().background(Background).safeDrawingPadding()) {
         Row(
             Modifier.fillMaxWidth().background(Border).padding(horizontal = 8.dp, vertical = 6.dp),
@@ -102,7 +118,7 @@ private fun App() {
 
         Box(Modifier.fillMaxSize()) {
             when (screen) {
-                Screen.Code -> CodeScreen()
+                Screen.Code -> CodeScreen(canvas, onShowCanvas = { showCanvas = true })
                 Screen.Render -> {
                     // Документ строится один раз: пересборка на кадре испортила бы замер.
                     val document = remember { benchmarkDocument() }
@@ -120,7 +136,7 @@ private fun App() {
  * Stop убивает процесс, сторожевые лимиты снимают зависшую программу.
  */
 @Composable
-private fun CodeScreen() {
+private fun CodeScreen(canvas: CanvasArea?, onShowCanvas: () -> Unit) {
     val context = LocalContext.current
 
     val projectDir = remember {
@@ -174,6 +190,7 @@ private fun CodeScreen() {
             script = scriptFile,
             workDir = projectDir,
             limits = PROTOTYPE_LIMITS,
+            canvas = canvas,
             listener = object : AndroidPythonBackend.Listener {
                 override fun onStarted(pid: Int) = onMain { status = "работает, процесс $pid" }
                 override fun onStdout(chunk: String) = onMain { output += chunk }
@@ -214,6 +231,7 @@ private fun CodeScreen() {
             Label("main.py", TextColor, 13)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (canvas != null) Button("Графика", Panel, onShowCanvas)
                 val running = handle != null
                 Button(if (running) "Stop" else "Run", if (running) Danger else Accent) {
                     if (running) handle?.stop() else run()
@@ -255,12 +273,29 @@ private fun CodeScreen() {
     }
 }
 
-private const val SAMPLE_PROGRAM = """import sys, platform
+private const val SAMPLE_PROGRAM = """import eide
 
-print("Python", sys.version.split()[0], "на", platform.machine())
-for i in range(5):
-    print("шаг", i)
-print("готово")
+# Квадрат ездит по экрану. Кнопка «Графика» показывает результат на весь экран,
+# свайп возвращает сюда — программа при этом продолжает работать.
+
+canvas = eide.canvas()
+clock = eide.Clock()
+
+x = 0
+step = 6
+
+for frame in range(600):
+    canvas.clear(0x101010FF)
+    canvas.fill_rect(x, canvas.height // 2 - 40, 80, 80, 0xFF3B30FF)
+    canvas.present()
+
+    x += step
+    if x <= 0 or x + 80 >= canvas.width:
+        step = -step
+
+    clock.tick(60)
+
+print("нарисовано 600 кадров")
 """
 
 @Composable
