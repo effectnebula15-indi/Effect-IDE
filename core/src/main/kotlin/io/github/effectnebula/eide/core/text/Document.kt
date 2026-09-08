@@ -38,6 +38,15 @@ class Document(initial: Rope = Rope.EMPTY) {
     var version: Long = 0
         private set
 
+    /**
+     * Последнее применённое изменение, включая откат.
+     *
+     * Нужно тем, кто должен отреагировать на правку, но не участвовал в ней:
+     * например, поставить курсор к месту, которое только что откатили.
+     */
+    var lastChange: DocumentChange? = null
+        private set
+
     private val undoStack = ArrayDeque<Entry>()
     private val redoStack = ArrayDeque<Entry>()
 
@@ -72,7 +81,7 @@ class Document(initial: Rope = Rope.EMPTY) {
             ?.let { it.start + it.text.length }
             ?: -1
 
-        return DocumentChange(edit, versionBefore, version)
+        return DocumentChange(edit, versionBefore, version).also { lastChange = it }
     }
 
     /** Откатывает последнюю группу правок целиком. */
@@ -106,7 +115,7 @@ class Document(initial: Rope = Rope.EMPTY) {
         // Следующая правка после отката не должна приклеиться к прежней группе.
         breakGrouping()
 
-        return applied?.let { DocumentChange(it, versionBefore, version) }
+        return applied?.let { DocumentChange(it, versionBefore, version) }?.also { lastChange = it }
     }
 
     /** Принудительно закрывает текущую группу: следующая правка начнёт новую. */
