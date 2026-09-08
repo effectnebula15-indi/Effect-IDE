@@ -14,6 +14,7 @@ pythonAndroidSha256 = "6d50cc3aa66e414a439594089bcdfb5f1264358155c70c1f00471c24c
 
 androidxActivityCompose = "1.13.0"
 androidxCore = "1.19.0"
+androidxLifecycle = "2.9.4"
 
 # Android
 minSdk = "27"        # android.os.SharedMemory требует API 27 (ADR-004)
@@ -34,6 +35,7 @@ compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMul
 
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidxLifecycle" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit" }
 

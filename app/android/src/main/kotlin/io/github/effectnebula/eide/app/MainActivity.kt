@@ -33,6 +33,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.project.TextFiles
 import io.github.effectnebula.eide.core.text.Document
@@ -43,9 +45,12 @@ import io.github.effectnebula.eide.runner.android.RunLimits
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkDocument
+import io.github.effectnebula.eide.ui.editor.AutoSave
 import io.github.effectnebula.eide.ui.editor.ExtraKeyRow
 import io.github.effectnebula.eide.ui.editorColors
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Приложение целиком: редактор, запуск того, что в нём написано, и стенд замеров.
@@ -136,6 +141,23 @@ private fun CodeScreen() {
     var status by remember { mutableStateOf("готов") }
     var handle by remember { mutableStateOf<AndroidPythonBackend.Handle?>(null) }
 
+    // Снимок берётся в главном потоке, а пишется в фоновом: rope неизменяем,
+    // поэтому снимок бесплатен и не разъедется с тем, что человек печатает
+    // дальше. Формат — тот же, в котором файл открывали: кодировка и переносы
+    // не должны меняться сами по себе.
+    fun saveNow() {
+        TextFiles.save(scriptFile, editorState.text, loaded.format)
+    }
+
+    AutoSave(editorState) {
+        val snapshot = editorState.text
+        withContext(Dispatchers.IO) { TextFiles.save(scriptFile, snapshot, loaded.format) }
+    }
+
+    // Уход в фон — последний надёжный момент: дальше система вправе убить процесс
+    // без предупреждения, и обещать асинхронную запись уже нельзя.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { saveNow() }
+
     fun onMain(action: () -> Unit) {
         mainHandler.post(action)
     }
@@ -143,9 +165,9 @@ private fun CodeScreen() {
     fun run() {
         output = ""
         status = "сохраняю и запускаю…"
-        // Сохраняем ровно то, что видно в редакторе, и в том же формате, в каком
-        // файл был открыт: кодировка и переносы не должны меняться сами по себе.
-        TextFiles.save(scriptFile, editorState.text, loaded.format)
+        // Синхронно, а не через автосохранение: запускать надо ровно то, что
+        // видно на экране, а не то, что успело записаться.
+        saveNow()
 
         val startedAt = System.currentTimeMillis()
         handle = AndroidPythonBackend(context).run(

@@ -29,4 +29,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    // Явно, а не транзитивно: от этой зависимости зависит сохранение текста
+    // при уходе в фон, и молча потерять её при обновлении Compose нельзя.
+    implementation(libs.androidx.lifecycle.runtime.compose)
 }
