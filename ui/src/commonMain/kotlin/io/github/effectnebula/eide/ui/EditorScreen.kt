@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.ui.editor.CodeEditor
 import io.github.effectnebula.eide.ui.editor.EditorColors
+import io.github.effectnebula.eide.ui.editor.observeEditor
 import io.github.effectnebula.eide.ui.theme.Eide
 
 /**
@@ -45,22 +46,36 @@ fun EditorScreen(state: EditorState, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
 
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(Eide.colors.panel)
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            val caret = state.carets.primary
-            val line = state.text.lineOf(caret.head)
-            val column = caret.head - state.text.lineStart(line)
+        StatusBar(state)
+    }
+}
 
-            Status("строка ${line + 1}, столбец ${column + 1}")
-            if (state.carets.carets.size > 1) Status("курсоров ${state.carets.carets.size}")
-            if (!caret.isEmpty) Status("выделено ${caret.end - caret.start}")
-            Status("строк ${state.text.lineCount}")
-        }
+/**
+ * Строка состояния вынесена отдельной функцией не ради красоты: Compose
+ * пересобирает ближайшую функцию, а не весь экран. Здесь подписка на ревизию
+ * уместна, а в редакторе рядом — нет, там правка должна доходить до отрисовки,
+ * минуя пересборку.
+ */
+@Composable
+private fun StatusBar(state: EditorState) {
+    // Чтение ревизии — это и есть подписка: без него строка застынет на месте.
+    observeEditor(state)
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Eide.colors.panel)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        val caret = state.carets.primary
+        val line = state.text.lineOf(caret.head)
+        val column = caret.head - state.text.lineStart(line)
+
+        Status("строка ${line + 1}, столбец ${column + 1}")
+        if (state.carets.carets.size > 1) Status("курсоров ${state.carets.carets.size}")
+        if (!caret.isEmpty) Status("выделено ${caret.end - caret.start}")
+        Status("строк ${state.text.lineCount}")
     }
 }
 

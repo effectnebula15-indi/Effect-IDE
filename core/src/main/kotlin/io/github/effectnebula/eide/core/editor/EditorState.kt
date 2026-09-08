@@ -16,6 +16,18 @@ enum class MoveTo {
 }
 
 /**
+ * Подписчик на изменения редактора: текст, курсоры — что угодно из того,
+ * что видно на экране.
+ *
+ * Ядро не знает про Compose, а Compose не умеет наблюдать за обычными полями.
+ * Этот интерфейс — единственный мост между ними, и он же нужен системной
+ * клавиатуре: IME обязан узнавать о правках, которые сделал не он.
+ */
+fun interface EditorListener {
+    fun onEditorChanged()
+}
+
+/**
  * Состояние редактируемого текста: документ плюс курсоры.
  *
  * Здесь собирается всё остальное ядро — rope, правки, undo, навигация — в тот вид,
@@ -29,9 +41,40 @@ class EditorState(
     var carets: CaretSet = CaretSet.single(0)
         private set
 
+    /** Растёт на каждом видимом изменении — и текста, и курсоров. */
+    var revision: Long = 0
+        private set
+
+    // Список заменяется целиком, а не правится на месте: уведомление случается
+    // на каждое нажатие клавиши, подписка — раз в жизни экрана. Дешевле
+    // копировать при подписке, чем защищаться от правки списка при обходе.
+    private var listeners: List<EditorListener> = emptyList()
+
     val text: Rope get() = document.text
 
     private val movement: Movement get() = Movement(document.text, graphemes)
+
+    // --- подписка --------------------------------------------------------------
+
+    fun addListener(listener: EditorListener) {
+        listeners = listeners + listener
+    }
+
+    fun removeListener(listener: EditorListener) {
+        listeners = listeners - listener
+    }
+
+    /**
+     * Оповещает подписчиков об изменении.
+     *
+     * Вызывается в конце каждой мутации, и только если что-то действительно
+     * поменялось: пустая правка или клонирование курсора в никуда не должны
+     * будить ни перерисовку, ни IME.
+     */
+    private fun notifyChanged() {
+        revision++
+        for (listener in listeners) listener.onEditorChanged()
+    }
 
     // --- правка ----------------------------------------------------------------
 
@@ -98,11 +141,14 @@ class EditorState(
      */
     private fun step(happened: Boolean): Boolean {
         if (!happened) return false
-        val lastChange = document.lastChange ?: return true
-        val target = lastChange.edit.replacements.firstOrNull()
-            ?.let { it.start + it.text.length }
-            ?: 0
-        carets = CaretSet.single(target.coerceIn(0, document.text.length))
+        val lastChange = document.lastChange
+        if (lastChange != null) {
+            val target = lastChange.edit.replacements.firstOrNull()
+                ?.let { it.start + it.text.length }
+                ?: 0
+            carets = CaretSet.single(target.coerceIn(0, document.text.length))
+        }
+        notifyChanged()
         return true
     }
 
@@ -124,6 +170,7 @@ class EditorState(
                 MoveTo.DocumentEnd -> caret.movedTo(document.text.length, extend)
             }
         }
+        notifyChanged()
     }
 
     fun setCarets(carets: CaretSet) {
@@ -131,10 +178,12 @@ class EditorState(
         // Новое положение курсора — новое действие: следующая правка не должна
         // приклеиться к тому, что человек набирал в прежнем месте.
         document.breakGrouping()
+        notifyChanged()
     }
 
     fun selectAll() {
         carets = CaretSet.of(listOf(Caret(anchor = 0, head = document.text.length)))
+        notifyChanged()
     }
 
     /** Добавляет курсор строкой ниже последнего — основа мультикурсора. */
@@ -156,6 +205,7 @@ class EditorState(
         val movedLine = document.text.lineOf(moved.head)
         if (movedLine == sourceLine) return
         carets = CaretSet.of(carets.carets + moved.collapsed())
+        notifyChanged()
     }
 
     // --- внутреннее ------------------------------------------------------------
@@ -164,6 +214,7 @@ class EditorState(
         if (edit.isEmpty || edit.replacements.all { it.start == it.end && it.text.isEmpty() }) return
         val change = document.apply(edit, kind) ?: return
         carets = carets.afterEdit(change.edit)
+        notifyChanged()
     }
 
     private fun indentOf(line: Int): String {
