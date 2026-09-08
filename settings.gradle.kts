@@ -21,6 +21,7 @@ rootProject.name = "effect-ide"
 include(":core")
 include(":platform:api")
 include(":platform:desktop")
+include(":platform:android")
 include(":runner")
 
 // Git в отдельном модуле, а не в :core (ADR-006): JGit не должен ехать

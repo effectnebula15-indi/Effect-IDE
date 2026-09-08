@@ -33,8 +33,14 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.text.Document
+import io.github.effectnebula.eide.core.text.Rope
+import io.github.effectnebula.eide.platform.android.IcuGraphemeBreaker
+import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkDocument
+import io.github.effectnebula.eide.ui.sampleDocumentText
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
 import io.github.effectnebula.eide.runner.android.KillReason
 import io.github.effectnebula.eide.runner.android.RunLimits
@@ -59,25 +65,35 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private enum class Screen { Runner, Render, Editor }
+
 @Composable
 private fun Prototypes() {
-    var showRenderBenchmark by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf(Screen.Runner) }
 
     Column(Modifier.fillMaxSize().background(Background)) {
         Row(
             Modifier.fillMaxWidth().background(Border).padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Tab("запуск кода · P1 и P4", !showRenderBenchmark) { showRenderBenchmark = false }
-            Tab("отрисовка · P2", showRenderBenchmark) { showRenderBenchmark = true }
+            Tab("запуск · P1 и P4", screen == Screen.Runner) { screen = Screen.Runner }
+            Tab("отрисовка · P2", screen == Screen.Render) { screen = Screen.Render }
+            Tab("редактор", screen == Screen.Editor) { screen = Screen.Editor }
         }
 
-        if (showRenderBenchmark) {
-            // Документ строится один раз: пересборка на каждом кадре испортила бы замер.
-            val document = remember { benchmarkDocument() }
-            RenderBenchmark(document, Modifier.weight(1f))
-        } else {
-            Box(Modifier.weight(1f)) { PrototypeScreen() }
+        when (screen) {
+            Screen.Render -> {
+                // Документ строится один раз: пересборка на каждом кадре испортила бы замер.
+                val document = remember { benchmarkDocument() }
+                RenderBenchmark(document, Modifier.weight(1f))
+            }
+            Screen.Editor -> {
+                val state = remember {
+                    EditorState(Document(Rope.of(sampleDocumentText())), IcuGraphemeBreaker())
+                }
+                EditorScreen(state, Modifier.weight(1f))
+            }
+            Screen.Runner -> Box(Modifier.weight(1f)) { PrototypeScreen() }
         }
     }
 }
