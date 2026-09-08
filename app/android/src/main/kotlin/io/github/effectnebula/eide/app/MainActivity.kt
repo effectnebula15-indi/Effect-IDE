@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +43,8 @@ import io.github.effectnebula.eide.runner.android.RunLimits
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkDocument
+import io.github.effectnebula.eide.ui.editor.ExtraKeyRow
+import io.github.effectnebula.eide.ui.editorColors
 import java.io.File
 
 /**
@@ -52,6 +56,10 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // targetSdk 36 означает edge-to-edge принудительно: окно больше не
+        // ужимается под клавиатуру само, и windowSoftInputMode=adjustResize
+        // этого не вернёт. Отступы считаем сами, через safeDrawingPadding.
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent { App() }
     }
@@ -78,7 +86,7 @@ private enum class Screen { Code, Render }
 private fun App() {
     var screen by remember { mutableStateOf(Screen.Code) }
 
-    Column(Modifier.fillMaxSize().background(Background)) {
+    Column(Modifier.fillMaxSize().background(Background).safeDrawingPadding()) {
         Row(
             Modifier.fillMaxWidth().background(Border).padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -218,6 +226,10 @@ private fun CodeScreen() {
                 mono = true,
             )
         }
+
+        // Самым нижним элементом: ряд должен быть вплотную к клавиатуре, иначе
+        // до него не дотянуться большим пальцем, ради которого он и нужен.
+        ExtraKeyRow(editorState, editorColors())
     }
 }
 

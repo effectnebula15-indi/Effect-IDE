@@ -29,20 +29,10 @@ import io.github.effectnebula.eide.ui.theme.Eide
  */
 @Composable
 fun EditorScreen(state: EditorState, modifier: Modifier = Modifier) {
-    val colors = EditorColors(
-        background = Eide.colors.background,
-        text = Eide.colors.text,
-        gutterBackground = Eide.colors.gutter,
-        gutterText = Eide.colors.gutterText,
-        currentLineGutterText = Eide.colors.text,
-        selection = Eide.colors.selection,
-        caret = Eide.colors.caret,
-    )
-
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
             state = state,
-            colors = colors,
+            colors = editorColors(),
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
 
@@ -78,6 +68,18 @@ private fun StatusBar(state: EditorState) {
         Status("строк ${state.text.lineCount}")
     }
 }
+
+/** Цвета редактора из темы. Нужны и снаружи — например, ряду клавиш. */
+@Composable
+fun editorColors(): EditorColors = EditorColors(
+    background = Eide.colors.background,
+    text = Eide.colors.text,
+    gutterBackground = Eide.colors.gutter,
+    gutterText = Eide.colors.gutterText,
+    currentLineGutterText = Eide.colors.text,
+    selection = Eide.colors.selection,
+    caret = Eide.colors.caret,
+)
 
 @Composable
 private fun Status(text: String) {

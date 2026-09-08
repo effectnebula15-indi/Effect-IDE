@@ -26,13 +26,20 @@ import io.github.effectnebula.eide.core.editor.MoveTo
  * (стрелки, у части клавиатур Backspace): их `BaseInputConnection.sendKeyEvent`
  * пересылает во View, и они попадают именно сюда.
  */
-internal fun Modifier.editorKeyInput(state: EditorState, afterAction: () -> Unit): Modifier =
+internal fun Modifier.editorKeyInput(state: EditorState): Modifier =
     onKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-        val handled = handleKey(state, event)
-        if (handled) afterAction()
-        handled
+        handleKey(state, event)
     }
+
+/**
+ * Отступ — четыре пробела, а не табуляция.
+ *
+ * Причина не в религии, а в Python: смешение табов и пробелов там ошибка
+ * времени выполнения, а не вопрос вкуса. Настройкой это станет тогда, когда
+ * появятся настройки.
+ */
+internal const val INDENT: String = "    "
 
 private fun handleKey(state: EditorState, event: KeyEvent): Boolean {
     val shift = event.isShiftPressed
@@ -79,7 +86,7 @@ private fun handleKey(state: EditorState, event: KeyEvent): Boolean {
         }
         Key.Tab -> {
             // Табуляция уходит в текст, а не переводит фокус: это редактор кода.
-            state.type("    ")
+            state.type(INDENT)
             return true
         }
         Key.A -> if (command) {
