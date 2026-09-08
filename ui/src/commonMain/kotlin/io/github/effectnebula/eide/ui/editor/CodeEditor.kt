@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.text.Rope
 import io.github.effectnebula.eide.ui.theme.Eide
 import kotlin.math.max
@@ -54,6 +55,8 @@ data class EditorColors(
     val currentLineGutterText: Color,
     val selection: Color,
     val caret: Color,
+    /** Подсветка совпадений поиска. Под выделением, поэтому заметно бледнее. */
+    val searchMatch: Color,
 )
 
 /**
@@ -72,6 +75,7 @@ fun CodeEditor(
     colors: EditorColors,
     modifier: Modifier = Modifier,
     fontSizeSp: Float = 13f,
+    search: SearchSession? = null,
 ) {
     val measurer = rememberTextMeasurer()
     val font = Eide.editorFont
@@ -168,6 +172,7 @@ fun CodeEditor(
                 gutterWidth = gutterWidthPx(state.text.lineCount, metrics),
                 scrollPx = scrollPx,
                 caretVisible = caretVisible,
+                search = search,
             )
         }
     }
@@ -212,6 +217,7 @@ private fun DrawScope.drawEditor(
     gutterWidth: Float,
     scrollPx: Float,
     caretVisible: Boolean,
+    search: SearchSession?,
 ) {
     val text = state.text
     if (metrics.height <= 0f) return
@@ -219,6 +225,14 @@ private fun DrawScope.drawEditor(
     val first = (scrollPx / metrics.height).toInt().coerceAtLeast(0)
     val visible = (size.height / metrics.height).roundToInt() + 2
     val last = min(first + visible, text.lineCount)
+
+    // Совпадения ищутся только в видимых строках: искать по всему документу
+    // ради подсветки экрана — это проход по мегабайтам на каждый кадр.
+    val matches = if (search == null || last <= first) {
+        emptyList()
+    } else {
+        search.matchesIn(text.lineStart(first), text.lineEnd(last - 1))
+    }
 
     val textWidth = (size.width - gutterWidth).coerceAtLeast(1f)
     val constraints = Constraints(maxWidth = textWidth.roundToInt())
@@ -234,6 +248,13 @@ private fun DrawScope.drawEditor(
             val lineEnd = text.lineEnd(line)
             val lineText = text.substring(lineStart, lineEnd)
             val layout = cache.get(lineText) { measurer.measure(it, style, constraints = constraints) }
+
+            for (match in matches) {
+                drawRange(
+                    colors.searchMatch, metrics, gutterWidth, layout,
+                    lineStart, lineEnd, top, match.start, match.end,
+                )
+            }
 
             drawSelection(state, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
 
@@ -266,26 +287,49 @@ private fun DrawScope.drawSelection(
     lineEnd: Int,
     top: Float,
 ) {
-    val length = layout.layoutInput.text.length
     for (caret in state.carets.carets) {
         if (caret.isEmpty) continue
-        if (caret.end < lineStart || caret.start > lineEnd) continue
-
-        val from = (caret.start.coerceAtLeast(lineStart) - lineStart).coerceIn(0, length)
-        val to = (caret.end.coerceAtMost(lineEnd) - lineStart).coerceIn(0, length)
-
-        val left = gutterWidth + layout.getHorizontalPosition(from, usePrimaryDirection = true)
-        val right = gutterWidth + layout.getHorizontalPosition(to, usePrimaryDirection = true)
-        // Выделение, захватившее перенос строки, тянем до края: иначе не видно,
-        // что выбрана строка целиком.
-        val extended = if (caret.end > lineEnd) size.width else right
-
-        drawRect(
-            color = colors.selection,
-            topLeft = Offset(left, top),
-            size = Size((extended - left).coerceAtLeast(1f), metrics.height),
+        drawRange(
+            colors.selection, metrics, gutterWidth, layout,
+            lineStart, lineEnd, top, caret.start, caret.end,
         )
     }
+}
+
+/**
+ * Закрашивает пересечение диапазона `[from, to)` с этой строкой.
+ *
+ * Общий код для выделения и подсветки поиска: правило «диапазон, захвативший
+ * перенос, тянется до края» одно на двоих, и разъезжаться ему незачем.
+ */
+private fun DrawScope.drawRange(
+    color: Color,
+    metrics: LineMetrics,
+    gutterWidth: Float,
+    layout: TextLayoutResult,
+    lineStart: Int,
+    lineEnd: Int,
+    top: Float,
+    from: Int,
+    to: Int,
+) {
+    if (to < lineStart || from > lineEnd) return
+
+    val length = layout.layoutInput.text.length
+    val start = (from.coerceAtLeast(lineStart) - lineStart).coerceIn(0, length)
+    val end = (to.coerceAtMost(lineEnd) - lineStart).coerceIn(0, length)
+
+    val left = gutterWidth + layout.getHorizontalPosition(start, usePrimaryDirection = true)
+    val right = gutterWidth + layout.getHorizontalPosition(end, usePrimaryDirection = true)
+    // Диапазон, захвативший перенос строки, тянем до края: иначе не видно, что
+    // выбрана строка целиком.
+    val extended = if (to > lineEnd) size.width else right
+
+    drawRect(
+        color = color,
+        topLeft = Offset(left, top),
+        size = Size((extended - left).coerceAtLeast(1f), metrics.height),
+    )
 }
 
 private fun DrawScope.drawCarets(

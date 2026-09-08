@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.ui.editor.CodeEditor
 import io.github.effectnebula.eide.ui.editor.EditorColors
 import io.github.effectnebula.eide.ui.editor.observeEditor
@@ -28,12 +29,17 @@ import io.github.effectnebula.eide.ui.theme.Eide
  * показывают то, что показывают все редакторы.
  */
 @Composable
-fun EditorScreen(state: EditorState, modifier: Modifier = Modifier) {
+fun EditorScreen(
+    state: EditorState,
+    modifier: Modifier = Modifier,
+    search: SearchSession? = null,
+) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
             state = state,
             colors = editorColors(),
             modifier = Modifier.fillMaxWidth().weight(1f),
+            search = search,
         )
 
         StatusBar(state)
@@ -79,6 +85,9 @@ fun editorColors(): EditorColors = EditorColors(
     currentLineGutterText = Eide.colors.text,
     selection = Eide.colors.selection,
     caret = Eide.colors.caret,
+    // Бледнее выделения: подсветка совпадений лежит под ним, и выделенное
+    // совпадение должно оставаться отличимым от остальных.
+    searchMatch = Eide.colors.selection.copy(alpha = 0.35f),
 )
 
 @Composable

@@ -39,6 +39,7 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
 import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
@@ -51,6 +52,7 @@ import io.github.effectnebula.eide.ui.benchmarkDocument
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
+import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import androidx.compose.runtime.CompositionLocalProvider
@@ -264,6 +266,16 @@ private fun RunPanel(
     val scope = rememberCoroutineScope()
     var autoRun by remember { mutableStateOf(Debug.autoRun) }
 
+    // Сессия поиска живёт вместе с файлом: закрыли файл — забыли запрос.
+    val search = active?.let { file ->
+        remember(file) {
+            SearchSession(file.state).apply {
+                Debug.search?.let { setQuery(io.github.effectnebula.eide.core.editor.SearchQuery(it)) }
+            }
+        }
+    }
+    var showSearch by remember(active) { mutableStateOf(Debug.showSearch) }
+
     fun onMain(action: () -> Unit) {
         // Слушатель зовут из фоновых потоков бэкенда. Складывать строки вывода
         // из нескольких потоков без переноса в один — верный способ потерять
@@ -346,11 +358,22 @@ private fun RunPanel(
             Tab(if (running) "Stop" else "Run", selected = true) {
                 if (running) handle?.stop() else run()
             }
+            if (search != null) {
+                Tab("Найти", showSearch) { showSearch = !showSearch }
+            }
             BasicText(status, style = TextStyle(color = Eide.colors.textDim, fontSize = 12.sp))
         }
 
+        if (showSearch && search != null) {
+            SearchBar(
+                session = search,
+                onClose = { showSearch = false },
+                onChanged = onChanged,
+            )
+        }
+
         if (active != null) {
-            EditorScreen(active.state, Modifier.weight(1f))
+            EditorScreen(active.state, Modifier.weight(1f), search = search)
         } else {
             Box(Modifier.weight(1f).padding(16.dp)) {
                 BasicText(
@@ -393,6 +416,10 @@ private object Debug {
 
     /** `-Deide.canvas` — открыть вкладку графики сразу. */
     val showCanvas: Boolean get() = System.getProperty("eide.canvas") != null
+
+    /** `-Deide.search=что` — открыть поиск с готовым запросом. */
+    val search: String? get() = System.getProperty("eide.search")
+    val showSearch: Boolean get() = search != null
 
     /**
      * Где лежит libeide_canvas.so и шим на Python.

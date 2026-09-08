@@ -44,6 +44,7 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.project.OpenFile
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
@@ -59,6 +60,7 @@ import io.github.effectnebula.eide.ui.editorColors
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
+import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -225,6 +227,10 @@ private fun WorkbenchScreen(
     var status by remember { mutableStateOf("готов") }
     var handle by remember { mutableStateOf<RunHandle?>(null) }
 
+    // Сессия поиска живёт вместе с файлом: закрыли файл — забыли запрос.
+    val search = active?.let { file -> remember(file) { SearchSession(file.state) } }
+    var showSearch by remember(active) { mutableStateOf(false) }
+
     /** Пишет всё изменённое синхронно. Возвращает активный файл, если он есть. */
     fun saveNow(): OpenFile? {
         workspace.saveModified()
@@ -322,6 +328,9 @@ private fun WorkbenchScreen(
             Label(active?.name ?: "нет открытых файлов", TextColor, 13)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (search != null) {
+                    Button("Найти", if (showSearch) Accent else Panel) { showSearch = !showSearch }
+                }
                 if (canvas != null) Button("Графика", Panel, onShowCanvas)
                 val running = handle != null
                 Button(if (running) "Stop" else "Run", if (running) Danger else Accent) {
@@ -345,9 +354,17 @@ private fun WorkbenchScreen(
             },
         )
 
+        if (showSearch && search != null) {
+            SearchBar(
+                session = search,
+                onClose = { showSearch = false },
+                onChanged = { workspaceRevision++ },
+            )
+        }
+
         Box(Modifier.fillMaxWidth().weight(1f)) {
             if (active != null) {
-                EditorScreen(active.state)
+                EditorScreen(active.state, search = search)
             } else {
                 Label("откройте файл во вкладке «проект»", TextDim, 13)
             }
