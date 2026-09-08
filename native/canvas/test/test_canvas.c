@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* nanosleep. На Linux он приезжает транзитивно через pthread.h, на macOS — нет. */
+#include <time.h>
 
 #define W 64
 #define H 48

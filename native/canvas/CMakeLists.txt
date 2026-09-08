@@ -19,7 +19,11 @@ if(EIDE_CANVAS_TESTS)
 
     add_executable(test_canvas src/eide_canvas.c test/test_canvas.c)
     target_include_directories(test_canvas PRIVATE include)
-    target_compile_definitions(test_canvas PRIVATE _POSIX_C_SOURCE=200809L)
+    # Только на Linux: в заголовках macOS строгий _POSIX_C_SOURCE наоборот
+    # прячет объявления, которые там лежат вне POSIX.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(test_canvas PRIVATE _POSIX_C_SOURCE=200809L)
+    endif()
     target_compile_options(test_canvas PRIVATE
         -Wall -Wextra -Werror -g -O1
         -fsanitize=${EIDE_SANITIZER} -fno-omit-frame-pointer)
