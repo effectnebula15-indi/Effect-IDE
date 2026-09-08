@@ -114,6 +114,20 @@ class LineStatesTest {
     }
 
     @Test
+    fun `every line of a long file is reachable`() {
+        // Кэш растёт удвоением, и записывает он на одну ячейку дальше запрошенной
+        // строки. Из-за этого падение случалось не «на больших файлах», а ровно
+        // на строках 255, 511, 1023 — на границе очередного удвоения. Поэтому
+        // здесь спрашиваются все строки подряд, а не одна далёкая.
+        val document = Document(Rope.of((0 until 600).joinToString("\n") { "x = $it" }))
+        val cache = LineStates(PythonHighlighter)
+
+        for (line in 0 until 600) {
+            assertEquals(LineHighlight.STATE_INITIAL, cache.stateBefore(document, line), "строка $line")
+        }
+    }
+
+    @Test
     fun `the first line always starts clean`() {
         val document = document("\"\"\"докстринг", "внутри")
 

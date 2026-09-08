@@ -39,7 +39,10 @@ internal class LineStates(private val highlighter: LineHighlighter) {
         val text = document.text
         if (line <= 0) return LineHighlight.STATE_INITIAL
 
-        ensureCapacity(line + 1)
+        // line + 2, а не line + 1: цикл ниже записывает состояние ПОСЛЕ строки
+        // line, то есть states[line + 1]. С запасом на единицу меньше падение
+        // случается ровно на строке 255, 511, 1023 — и только на ней.
+        ensureCapacity(line + 2)
         while (computedUpTo <= line) {
             val previous = if (computedUpTo == 0) {
                 LineHighlight.STATE_INITIAL

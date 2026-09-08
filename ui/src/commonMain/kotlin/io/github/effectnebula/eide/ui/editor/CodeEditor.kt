@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -84,6 +85,12 @@ fun CodeEditor(
     fontSizeSp: Float = 13f,
     search: SearchSession? = null,
     highlighter: LineHighlighter = LineHighlighter.None,
+    /**
+     * Крючок для замеров (P2). В обычной работе null, и ничего связанного с ним
+     * не исполняется. Существует ради того, чтобы стенд мерил этот рендер,
+     * а не свой собственный — см. [RenderProbe].
+     */
+    probe: RenderProbe? = null,
 ) {
     val measurer = rememberTextMeasurer()
     val font = Eide.editorFont
@@ -143,31 +150,64 @@ fun CodeEditor(
         }
     }
 
-    LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+    // Ввод при замерах не подключается совсем. Причина не в стоимости узлов,
+    // а в том, что сессия ввода поднимает на телефоне клавиатуру: она закрывает
+    // половину экрана, видимых строк остаётся вдвое меньше, и кадр обходится
+    // дешевле, чем в работе. Такой замер льстит.
+    val input = if (probe == null) {
+        Modifier
+            .imeInput(state)
+            .focusRequester(focusRequester)
+            .focusable()
+            .editorKeyInput(state)
+            .pointerInput(metrics) {
+                detectTapGestures { position ->
+                    val text = state.text
+                    val gutter = gutterWidthPx(text.lineCount, metrics)
+                    state.setCarets(
+                        CaretSet.single(offsetAt(text, metrics, gutter, scrollPx, position))
+                    )
+                    runCatching { focusRequester.requestFocus() }
+                    // Тап по тексту — просьба печатать. Клавиатуру, закрытую
+                    // кнопкой «назад», иначе не вернуть: фокус уже здесь,
+                    // и сессия ввода не перезапустится сама.
+                    keyboard?.show()
+                }
+            }
+    } else {
+        Modifier
+    }
+
+    if (probe == null) {
+        LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+    }
+
+    // Автопрокрутка стенда. Ключи включают metrics: при смене размера шрифта
+    // меняется высота строки, а с ней и граница прокрутки — эффект со старой
+    // высотой крутил бы за пределы документа.
+    if (probe != null && probe.autoScrollPxPerSecond > 0f) {
+        LaunchedEffect(probe, state, metrics) {
+            var previous = 0L
+            while (true) {
+                withFrameNanos { now ->
+                    if (previous != 0L) {
+                        val limit = maxScrollPx(state, metrics, viewportHeight)
+                        val step = probe.autoScrollPxPerSecond * (now - previous) / 1_000_000_000f
+                        // Дойдя до конца, начинаем сначала: замер идёт непрерывно.
+                        scrollPx = if (scrollPx + step >= limit) 0f else scrollPx + step
+                    }
+                    previous = now
+                }
+            }
+        }
+    }
 
     Box(modifier.background(colors.background)) {
         Canvas(
             Modifier
                 .fillMaxSize()
                 .scrollable(scrollState, Orientation.Vertical)
-                .imeInput(state)
-                .focusRequester(focusRequester)
-                .focusable()
-                .editorKeyInput(state)
-                .pointerInput(metrics) {
-                    detectTapGestures { position ->
-                        val text = state.text
-                        val gutter = gutterWidthPx(text.lineCount, metrics)
-                        state.setCarets(
-                            CaretSet.single(offsetAt(text, metrics, gutter, scrollPx, position))
-                        )
-                        runCatching { focusRequester.requestFocus() }
-                        // Тап по тексту — просьба печатать. Клавиатуру, закрытую
-                        // кнопкой «назад», иначе не вернуть: фокус уже здесь,
-                        // и сессия ввода не перезапустится сама.
-                        keyboard?.show()
-                    }
-                }
+                .then(input)
         ) {
             viewportHeight = size.height.roundToInt()
             // Чтение ревизии в фазе отрисовки — это подписка: правка перерисует
@@ -187,6 +227,11 @@ fun CodeEditor(
                 highlighter = highlighter,
                 lineStates = lineStates,
             )
+            probe?.let {
+                it.cacheHits = cache.hits
+                it.cacheMisses = cache.misses
+                it.firstVisibleLine = (scrollPx / metrics.height).toInt()
+            }
         }
     }
 }

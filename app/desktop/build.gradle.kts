@@ -57,6 +57,8 @@ tasks.withType<JavaExec>().configureEach {
     System.getProperty("eide.benchmarkSeconds")?.let {
         systemProperty("eide.benchmarkSeconds", it)
     }
+    System.getProperty("eide.benchmarkFont")?.let { systemProperty("eide.benchmarkFont", it) }
+    System.getProperty("eide.benchmarkHighlight")?.let { systemProperty("eide.benchmarkHighlight", it) }
     // На машине без GPU (например, под Xvfb) Skiko не поднимет GL-контекст.
     System.getProperty("skiko.renderApi")?.let { systemProperty("skiko.renderApi", it) }
     System.getProperty("eide.screenshot")?.let { systemProperty("eide.screenshot", it) }

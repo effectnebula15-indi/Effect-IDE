@@ -49,7 +49,7 @@ import io.github.effectnebula.eide.runner.LocalPythonBackend
 import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
-import io.github.effectnebula.eide.ui.benchmarkDocument
+import io.github.effectnebula.eide.ui.benchmarkEditor
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
@@ -76,6 +76,10 @@ fun main() = application {
 
     // Прогон без человека: -Deide.benchmarkSeconds=15 печатает счётчики и выходит.
     val benchmarkSeconds = System.getProperty("eide.benchmarkSeconds")?.toIntOrNull()
+    // Размер шрифта задаётся снаружи, потому что цифры для разных размеров
+    // нужны сравнимые, а нажатие на кнопку в середине прогона сравнимости не даёт.
+    val benchmarkFont = System.getProperty("eide.benchmarkFont")?.toFloatOrNull() ?: 13f
+    val benchmarkHighlight = System.getProperty("eide.benchmarkHighlight") != "false"
 
     Window(
         onCloseRequest = ::exitApplication,
@@ -95,7 +99,7 @@ fun main() = application {
 
         CompositionLocalProvider(LocalEditorFont provides remember { jetBrainsMono() }) {
             if (benchmarkSeconds != null) {
-                BenchmarkOnly(benchmarkSeconds)
+                BenchmarkOnly(benchmarkSeconds, benchmarkFont, benchmarkHighlight)
             } else {
                 DesktopShell()
             }
@@ -104,14 +108,17 @@ fun main() = application {
 }
 
 @Composable
-private fun BenchmarkOnly(seconds: Int) {
-    val document = remember { benchmarkDocument() }
+private fun BenchmarkOnly(seconds: Int, fontSizeSp: Float, highlight: Boolean) {
+    val editor = remember { benchmarkEditor(JdkGraphemeBreaker()) }
     RenderBenchmark(
-        document = document,
+        state = editor,
+        initialFontSizeSp = fontSizeSp,
+        initialHighlight = highlight,
         reporter = { report ->
             println(
-                "секунда=%d fps=%.1f худший=%.1fмс просадок=%d/%d разметка=%d/%d".format(
-                    report.second, report.fps, report.worstFrameMs,
+                "секунда=%d шрифт=%.0f подсветка=%s fps=%.1f худший=%.1fмс просадок=%d/%d разметка=%d/%d".format(
+                    report.second, report.fontSizeSp, if (report.highlighted) "да" else "нет",
+                    report.fps, report.worstFrameMs,
                     report.jankFrames, report.totalFrames,
                     report.cacheHits, report.cacheHits + report.cacheMisses,
                 )
@@ -203,8 +210,8 @@ private fun DesktopShell() {
         }
 
         if (showBenchmark) {
-            val document = remember { benchmarkDocument() }
-            RenderBenchmark(document, Modifier.weight(1f))
+            val editor = remember { benchmarkEditor(JdkGraphemeBreaker()) }
+            RenderBenchmark(editor, Modifier.weight(1f))
             return@Column
         }
 

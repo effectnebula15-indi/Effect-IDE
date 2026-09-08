@@ -54,7 +54,7 @@ import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
 import io.github.effectnebula.eide.runner.android.CanvasArea
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
-import io.github.effectnebula.eide.ui.benchmarkDocument
+import io.github.effectnebula.eide.ui.benchmarkEditor
 import io.github.effectnebula.eide.ui.editor.AutoSave
 import io.github.effectnebula.eide.ui.editor.ExtraKeyRow
 import io.github.effectnebula.eide.ui.editorColors
@@ -173,8 +173,8 @@ private fun Shell() {
                 )
                 Screen.Render -> {
                     // Документ строится один раз: пересборка на кадре испортила бы замер.
-                    val document = remember { benchmarkDocument() }
-                    RenderBenchmark(document)
+                    val editor = remember { benchmarkEditor(IcuGraphemeBreaker()) }
+                    RenderBenchmark(editor)
                 }
             }
         }
