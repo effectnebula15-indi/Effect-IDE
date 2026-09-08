@@ -92,21 +92,3 @@ private fun Status(text: String) {
         ),
     )
 }
-
-/** Небольшой файл-пример: на нём видно отступы, кириллицу и длинные строки. */
-fun sampleDocumentText(): String = """
-    # Effect IDE — редактор работает
-
-    def приветствие(имя):
-        # отступ сохраняется при переносе строки
-        text = f"привет, {имя}"
-        return text
-
-
-    def main():
-        for i in range(10):
-            print(приветствие(f"мир {i}"))
-
-
-    main()
-""".trimIndent()

@@ -40,4 +40,4 @@ internal fun rememberEditorRevision(state: EditorState): MutableLongState {
  * Возвращаемое значение обычно не нужно — важно само чтение.
  */
 @Composable
-internal fun observeEditor(state: EditorState): Long = rememberEditorRevision(state).longValue
+fun observeEditor(state: EditorState): Long = rememberEditorRevision(state).longValue

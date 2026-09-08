@@ -38,9 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import io.github.effectnebula.eide.core.editor.EditorState
-import io.github.effectnebula.eide.core.project.TextFiles
-import io.github.effectnebula.eide.core.text.Document
+import io.github.effectnebula.eide.core.project.OpenFile
+import io.github.effectnebula.eide.core.project.ProjectTree
+import io.github.effectnebula.eide.core.project.Workspace
 import io.github.effectnebula.eide.platform.android.IcuGraphemeBreaker
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
 import io.github.effectnebula.eide.runner.android.CanvasArea
@@ -52,6 +52,8 @@ import io.github.effectnebula.eide.ui.benchmarkDocument
 import io.github.effectnebula.eide.ui.editor.AutoSave
 import io.github.effectnebula.eide.ui.editor.ExtraKeyRow
 import io.github.effectnebula.eide.ui.editorColors
+import io.github.effectnebula.eide.ui.project.FileTabs
+import io.github.effectnebula.eide.ui.project.FileTreePanel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -89,7 +91,7 @@ private val PROTOTYPE_LIMITS = RunLimits(
     maxResidentBytes = 256L * 1024 * 1024,
 )
 
-private enum class Screen { Code, Render }
+private enum class Screen { Project, Code, Render }
 
 @Composable
 private fun App() {
@@ -138,13 +140,16 @@ private fun App() {
             Modifier.fillMaxWidth().background(Border).padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            Tab("проект", screen == Screen.Project) { screen = Screen.Project }
             Tab("код", screen == Screen.Code) { screen = Screen.Code }
             Tab("отрисовка · P2", screen == Screen.Render) { screen = Screen.Render }
         }
 
         Box(Modifier.fillMaxSize()) {
             when (screen) {
-                Screen.Code -> CodeScreen(
+                Screen.Project, Screen.Code -> WorkbenchScreen(
+                    showTree = screen == Screen.Project,
+                    onFileOpened = { screen = Screen.Code },
                     canvas = canvas,
                     onShowCanvas = { showCanvas = true },
                     onRunStarted = { awaitingFirstFrame = true },
@@ -160,13 +165,19 @@ private fun App() {
 }
 
 /**
- * Редактор и вывод программы над одним и тем же файлом.
+ * Проект, редактор и вывод программы.
+ *
+ * Одна панель за раз, а не три колонки: на телефоне колонки превращаются в
+ * полоски, в которых ничего не прочесть (Шаг 3). Дерево и редактор
+ * переключаются вкладками сверху, состояние обоих при этом живёт дальше.
  *
  * Прототипы P1 и P4 живут здесь же: Run запускает то, что сейчас в редакторе,
  * Stop убивает процесс, сторожевые лимиты снимают зависшую программу.
  */
 @Composable
-private fun CodeScreen(
+private fun WorkbenchScreen(
+    showTree: Boolean,
+    onFileOpened: () -> Unit,
     canvas: CanvasArea?,
     onShowCanvas: () -> Unit,
     onRunStarted: () -> Unit,
@@ -177,31 +188,43 @@ private fun CodeScreen(
         File(context.filesDir, "projects/demo").apply { mkdirs() }
     }
     val scriptFile = remember {
-        File(projectDir, "main.py").apply {
-            // Первый запуск: кладём пример, чтобы было что запустить сразу.
-            if (!exists()) writeText(SAMPLE_PROGRAM)
-        }
+        // Первый запуск: кладём два примера, чтобы было что запустить сразу и
+        // чтобы дерево с вкладками показывали не один файл.
+        File(projectDir, "console.py").apply { if (!exists()) writeText(CONSOLE_PROGRAM) }
+        File(projectDir, "main.py").apply { if (!exists()) writeText(SAMPLE_PROGRAM) }
     }
-    val loaded = remember { TextFiles.load(scriptFile) }
-    val editorState = remember {
-        EditorState(Document(loaded.text), IcuGraphemeBreaker())
+
+    val workspace = remember {
+        Workspace(ProjectTree(projectDir), IcuGraphemeBreaker()).apply { open(scriptFile) }
     }
+
+    // Workspace — обычный объект, снапшот-система Compose за ним не следит.
+    // Счётчик поднимается на каждое открытие, закрытие и переключение: то же
+    // решение, что и для EditorState, и по той же причине.
+    var workspaceRevision by remember { mutableStateOf(0) }
+    @Suppress("UNUSED_EXPRESSION")
+    workspaceRevision
+
+    val active: OpenFile? = workspace.active
 
     var output by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("готов") }
     var handle by remember { mutableStateOf<AndroidPythonBackend.Handle?>(null) }
 
-    // Снимок берётся в главном потоке, а пишется в фоновом: rope неизменяем,
-    // поэтому снимок бесплатен и не разъедется с тем, что человек печатает
-    // дальше. Формат — тот же, в котором файл открывали: кодировка и переносы
-    // не должны меняться сами по себе.
-    fun saveNow() {
-        TextFiles.save(scriptFile, editorState.text, loaded.format)
+    /** Пишет всё изменённое синхронно. Возвращает активный файл, если он есть. */
+    fun saveNow(): OpenFile? {
+        workspace.saveModified()
+        return workspace.active
     }
 
-    AutoSave(editorState) {
-        val snapshot = editorState.text
-        withContext(Dispatchers.IO) { TextFiles.save(scriptFile, snapshot, loaded.format) }
+    if (active != null) {
+        AutoSave(active.state) {
+            // Снимок берётся в главном потоке, а пишется в фоновом: rope
+            // неизменяем, поэтому снимок бесплатен и не разъедется с тем, что
+            // человек печатает дальше.
+            withContext(Dispatchers.IO) { workspace.save(active) }
+            workspaceRevision++
+        }
     }
 
     // Уход в фон — последний надёжный момент: дальше система вправе убить процесс
@@ -213,16 +236,18 @@ private fun CodeScreen(
     }
 
     fun run() {
+        // Синхронно, а не через автосохранение: запускать надо ровно то, что
+        // видно на экране, а не то, что успело записаться.
+        val target = saveNow() ?: return
+        workspaceRevision++
+
         output = ""
         status = "сохраняю и запускаю…"
         onRunStarted()
-        // Синхронно, а не через автосохранение: запускать надо ровно то, что
-        // видно на экране, а не то, что успело записаться.
-        saveNow()
 
         val startedAt = System.currentTimeMillis()
         handle = AndroidPythonBackend(context).run(
-            script = scriptFile,
+            script = target.file,
             workDir = projectDir,
             limits = PROTOTYPE_LIMITS,
             canvas = canvas,
@@ -257,25 +282,60 @@ private fun CodeScreen(
         )
     }
 
+    if (showTree) {
+        FileTreePanel(
+            tree = workspace.tree,
+            selected = active?.file,
+            onOpen = { file ->
+                // Уходя с файла, дописываем его: секунда автосохранения могла
+                // не наступить, а вернуться человек может нескоро.
+                saveNow()
+                workspace.open(file)
+                workspaceRevision++
+                onFileOpened()
+            },
+        )
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().height(48.dp).background(Panel).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Label("main.py", TextColor, 13)
+            Label(active?.name ?: "нет открытых файлов", TextColor, 13)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (canvas != null) Button("Графика", Panel, onShowCanvas)
                 val running = handle != null
                 Button(if (running) "Stop" else "Run", if (running) Danger else Accent) {
-                    if (running) handle?.stop() else run()
+                    if (running) handle?.stop() else if (active != null) run()
                 }
             }
         }
 
+        FileTabs(
+            files = workspace.files,
+            active = active,
+            onSelect = { file ->
+                saveNow()
+                workspace.activate(file.file)
+                workspaceRevision++
+            },
+            onClose = { file ->
+                saveNow()
+                workspace.close(file.file)
+                workspaceRevision++
+            },
+        )
+
         Box(Modifier.fillMaxWidth().weight(1f)) {
-            EditorScreen(editorState)
+            if (active != null) {
+                EditorScreen(active.state)
+            } else {
+                Label("откройте файл во вкладке «проект»", TextDim, 13)
+            }
         }
 
         Row(
@@ -304,9 +364,17 @@ private fun CodeScreen(
 
         // Самым нижним элементом: ряд должен быть вплотную к клавиатуре, иначе
         // до него не дотянуться большим пальцем, ради которого он и нужен.
-        ExtraKeyRow(editorState, editorColors())
+        if (active != null) ExtraKeyRow(active.state, editorColors())
     }
 }
+
+private const val CONSOLE_PROGRAM = """import sys, platform
+
+print("Python", sys.version.split()[0], "на", platform.machine())
+for i in range(5):
+    print("шаг", i)
+print("готово")
+"""
 
 private const val SAMPLE_PROGRAM = """import eide
 
