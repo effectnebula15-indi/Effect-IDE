@@ -88,6 +88,24 @@ EC_NO_TSAN static void copy_slot_pixels(void *dst, const void *src, size_t bytes
     memcpy(dst, src, bytes);
 }
 
+uint32_t ec_pack_rgba(uint32_t rgba) {
+    uint32_t r = (rgba >> 24) & 0xFFu;
+    uint32_t g = (rgba >> 16) & 0xFFu;
+    uint32_t b = (rgba >> 8) & 0xFFu;
+    uint32_t a = rgba & 0xFFu;
+
+    /*
+     * Собираем число так, чтобы при записи как uint32_t в памяти оказались
+     * байты R, G, B, A. Порядок сборки зависит от порядка байтов машины —
+     * поэтому он вычисляется, а не берётся из головы.
+     */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return (r << 24) | (g << 16) | (b << 8) | a;
+#else
+    return (a << 24) | (b << 16) | (g << 8) | r;
+#endif
+}
+
 static size_t slot_bytes_of(int32_t width, int32_t height) {
     return (size_t)width * (size_t)height * 4u;
 }
@@ -207,11 +225,12 @@ void ec_fill_rect(ec_ctx *ctx, int32_t x, int32_t y, int32_t w, int32_t h, uint3
     if (y1 > height) y1 = height;
     if (x0 >= x1 || y0 >= y1) return;
 
+    uint32_t packed = ec_pack_rgba(rgba);
     uint32_t *pixels = (uint32_t *)slot_pixels(ctx, ctx->writing);
     for (int32_t row = y0; row < (int32_t)y1; row++) {
         uint32_t *line = pixels + (size_t)row * (size_t)width;
         for (int32_t col = x0; col < (int32_t)x1; col++) {
-            line[col] = rgba;
+            line[col] = packed;
         }
     }
 }

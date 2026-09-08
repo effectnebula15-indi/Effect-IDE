@@ -146,6 +146,7 @@ android {
                 arguments += listOf(
                     "-DPYTHON_PREFIX_DIR=${pythonPrefix.get().asFile.absolutePath}",
                     "-DPYTHON_VERSION=$pyXY",
+                    "-DEIDE_CANVAS_DIR=${rootProject.layout.projectDirectory.dir("native/canvas").asFile}",
                 )
             }
         }

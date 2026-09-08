@@ -29,6 +29,42 @@ static void *make_area(size_t *size_out) {
     return area;
 }
 
+static void test_colour_byte_order(void) {
+    /*
+     * Красный — 0xFF0000FF. В памяти первым байтом обязан лежать R.
+     * Если положить число как uint32_t на little-endian, первым окажется A,
+     * и на экране красное станет синим.
+     */
+    uint32_t packed = ec_pack_rgba(0xFF0000FFu);
+    const unsigned char *bytes = (const unsigned char *)&packed;
+    assert(bytes[0] == 0xFF);
+    assert(bytes[1] == 0x00);
+    assert(bytes[2] == 0x00);
+    assert(bytes[3] == 0xFF);
+
+    /* Несимметричный цвет: тождественная упаковка здесь не спрячется. */
+    uint32_t teal = ec_pack_rgba(0x11223344u);
+    const unsigned char *t = (const unsigned char *)&teal;
+    assert(t[0] == 0x11 && t[1] == 0x22 && t[2] == 0x33 && t[3] == 0x44);
+}
+
+static void test_colour_reaches_the_reader_in_the_right_order(void) {
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+
+    ec_begin_frame(ctx);
+    ec_clear(ctx, 0x11223344u);
+    ec_end_frame(ctx);
+
+    unsigned char dst[PIXELS * 4];
+    assert(ec_read_frame(area, size, dst, sizeof(dst), 0) == 1);
+    assert(dst[0] == 0x11 && dst[1] == 0x22 && dst[2] == 0x33 && dst[3] == 0x44);
+
+    ec_close(ctx);
+    free(area);
+}
+
 static void test_area_size(void) {
     assert(ec_area_size(0, 10) == 0);
     assert(ec_area_size(10, 0) == 0);
@@ -87,7 +123,7 @@ static void test_no_frame_before_end(void) {
 
     ec_end_frame(ctx);
     assert(ec_read_frame(area, size, dst, sizeof(dst), 0) == 1);
-    assert(dst[0] == 0xFF0000FFu);
+    assert(dst[0] == ec_pack_rgba(0xFF0000FFu));
 
     ec_close(ctx);
     free(area);
@@ -112,7 +148,7 @@ static void test_reader_skips_what_it_already_has(void) {
     ec_clear(ctx, 0x55667788u);
     ec_end_frame(ctx);
     assert(ec_read_frame(area, size, dst, sizeof(dst), frame) == 2);
-    assert(dst[0] == 0x55667788u);
+    assert(dst[0] == ec_pack_rgba(0x55667788u));
 
     ec_close(ctx);
     free(area);
@@ -136,7 +172,7 @@ static void test_newest_frame_wins_after_a_full_round(void) {
 
     uint32_t dst[PIXELS];
     assert(ec_read_frame(area, size, dst, sizeof(dst), 0) == 4);
-    assert(dst[0] == 0x04040404u);
+    assert(dst[0] == ec_pack_rgba(0x04040404u));
 
     ec_close(ctx);
     free(area);
@@ -158,7 +194,7 @@ static void test_writer_death_leaves_the_last_frame_readable(void) {
 
     uint32_t dst[PIXELS];
     assert(ec_read_frame(area, size, dst, sizeof(dst), 0) == 1);
-    assert(dst[0] == 0xAAAAAAAAu);
+    assert(dst[0] == ec_pack_rgba(0xAAAAAAAAu));
 
     free(area);
 }
@@ -179,19 +215,19 @@ static void test_rect_clipping(void) {
     uint32_t dst[PIXELS];
     assert(ec_read_frame(area, size, dst, sizeof(dst), 0) == 1);
 
-    assert(dst[0] == 0xFFFFFFFFu);
-    assert(dst[1 * W + 1] == 0xFFFFFFFFu);
-    assert(dst[2 * W + 2] == 0x00000000u);
-    assert(dst[(H - 1) * W + (W - 1)] == 0x11111111u);
-    assert(dst[5 * W + 5] == 0x00000000u);
+    assert(dst[0] == ec_pack_rgba(0xFFFFFFFFu));
+    assert(dst[1 * W + 1] == ec_pack_rgba(0xFFFFFFFFu));
+    assert(dst[2 * W + 2] == ec_pack_rgba(0x00000000u));
+    assert(dst[(H - 1) * W + (W - 1)] == ec_pack_rgba(0x11111111u));
+    assert(dst[5 * W + 5] == ec_pack_rgba(0x00000000u));
 
     /*
      * Главная проверка обрезки: без неё строка не кончается на краю, а
      * перетекает в начало следующей. Прямоугольник шириной сто пикселей от
      * (W-2) залил бы начало последней строки — а он туда не заезжал.
      */
-    assert(dst[(H - 1) * W + 0] == 0x00000000u);
-    assert(dst[(H - 2) * W + 0] == 0x00000000u);
+    assert(dst[(H - 1) * W + 0] == ec_pack_rgba(0x00000000u));
+    assert(dst[(H - 2) * W + 0] == ec_pack_rgba(0x00000000u));
 
     /* Зеркальная проверка для левого края: строка не начинается раньше нуля. */
     ec_begin_frame(ctx);
@@ -199,10 +235,10 @@ static void test_rect_clipping(void) {
     ec_fill_rect(ctx, -3, 4, 5, 1, 0x44444444u);
     ec_end_frame(ctx);
     assert(ec_read_frame(area, size, dst, sizeof(dst), 1) == 2);
-    assert(dst[4 * W + 0] == 0x44444444u);
-    assert(dst[4 * W + 1] == 0x44444444u);
-    assert(dst[4 * W + 2] == 0x00000000u);
-    assert(dst[3 * W + (W - 1)] == 0x00000000u);
+    assert(dst[4 * W + 0] == ec_pack_rgba(0x44444444u));
+    assert(dst[4 * W + 1] == ec_pack_rgba(0x44444444u));
+    assert(dst[4 * W + 2] == ec_pack_rgba(0x00000000u));
+    assert(dst[3 * W + (W - 1)] == ec_pack_rgba(0x00000000u));
 
     ec_close(ctx);
     free(area);
@@ -227,7 +263,7 @@ static void test_clipping_protects_the_end_of_the_area(void) {
 
     uint32_t dst[PIXELS];
     assert(ec_read_frame(area, size, dst, sizeof(dst), 0) == 3);
-    assert(dst[(H - 1) * W + (W - 1)] == 0xFFFFFFFFu);
+    assert(dst[(H - 1) * W + (W - 1)] == ec_pack_rgba(0xFFFFFFFFu));
 
     ec_close(ctx);
     free(area);
@@ -327,6 +363,8 @@ static void test_no_torn_frames_under_contention(void) {
 }
 
 int main(void) {
+    test_colour_byte_order();
+    test_colour_reaches_the_reader_in_the_right_order();
     test_area_size();
     test_too_small_area_is_rejected();
     test_garbage_is_not_mistaken_for_a_frame();

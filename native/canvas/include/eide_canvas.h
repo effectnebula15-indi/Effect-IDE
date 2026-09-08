@@ -28,11 +28,25 @@ extern "C" {
  */
 #define EC_SLOTS 3u
 
-/* RGBA, по байту на канал, без предумножения. */
+/*
+ * В памяти байты идут R, G, B, A — так их ждёт Android от `Bitmap.ARGB_8888`
+ * (название врёт: раскладка там RGBA) и так же их читает OpenGL с GL_RGBA.
+ * Без предумножения.
+ */
 #define EC_FORMAT_RGBA8888 1u
 
 /* Смещение первого слота от начала области. Кратно 64 — размеру кэш-линии. */
 #define EC_PIXELS_OFFSET 256u
+
+/**
+ * Цвет как его пишут в коде: `0xRRGGBBAA`, красный — `0xFF0000FF`.
+ *
+ * Раскладывает его по байтам в том порядке, в каком лежит пиксель. Это не
+ * тождественное преобразование: положить число в память как `uint32_t` на
+ * little-endian значит перевернуть каналы, и красный станет синим. Ошибка
+ * такого рода видна сразу — но объясняется долго.
+ */
+uint32_t ec_pack_rgba(uint32_t rgba);
 
 /** Сколько байт нужно области для кадра указанного размера. */
 size_t ec_area_size(int32_t width, int32_t height);
@@ -63,6 +77,7 @@ uint64_t ec_frame_number(const ec_ctx *ctx);
 /* --- рисование ---------------------------------------------------------- */
 
 void ec_begin_frame(ec_ctx *ctx);
+/* Цвет везде в виде `0xRRGGBBAA` — см. ec_pack_rgba. */
 void ec_clear(ec_ctx *ctx, uint32_t rgba);
 void ec_fill_rect(ec_ctx *ctx, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgba);
 
