@@ -54,8 +54,7 @@ def pixel(raw, x, y):
 
 
 def main():
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..",
-                                    "runner", "android", "src", "main", "python"))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
     lib = load_library()
     area, size = make_area(lib)

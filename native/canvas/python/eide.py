@@ -28,9 +28,9 @@ import time
 
 __all__ = ["Canvas", "Clock", "canvas", "rgb", "available"]
 
-_LIBRARY = "libeide_canvas.so"
-
+_ENV_LIBRARY = "EIDE_CANVAS_LIB"
 _ENV_ADDRESS = "EIDE_CANVAS_ADDR"
+_ENV_PATH = "EIDE_CANVAS_PATH"
 _ENV_SIZE = "EIDE_CANVAS_SIZE"
 _ENV_WIDTH = "EIDE_CANVAS_W"
 _ENV_HEIGHT = "EIDE_CANVAS_H"
@@ -46,7 +46,7 @@ def rgb(r, g, b, a=255):
 
 def available():
     """Есть ли к чему подключаться. Ложь, если программу запустили без графики."""
-    return _ENV_ADDRESS in os.environ
+    return _ENV_ADDRESS in os.environ or _ENV_PATH in os.environ
 
 
 class _Library:
@@ -58,7 +58,10 @@ class _Library:
     """
 
     def __init__(self):
-        self._lib = ctypes.CDLL(_LIBRARY)
+        # Путь к библиотеке приходит из окружения, если он известен снаружи.
+        # На Android она лежит в каталоге нативных библиотек приложения, и
+        # достаточно имени; на десктопе имя ничего не значит.
+        self._lib = ctypes.CDLL(os.environ.get(_ENV_LIBRARY, "libeide_canvas.so"))
 
         self._lib.ec_open_writer.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
         self._lib.ec_open_writer.restype = ctypes.c_void_p
@@ -92,8 +95,11 @@ class Canvas:
     она показывает последний целый.
     """
 
-    def __init__(self, address, size, width, height):
+    def __init__(self, address, size, width, height, mapping=None):
         self._library = _Library()
+        # Ссылка на отображение держится здесь: если его собрать сборщиком
+        # мусора, область исчезнет из-под уже открытого писателя.
+        self._mapping = mapping
         self._ctx = self._library.ec_open_writer(ctypes.c_void_p(address), size)
         if not self._ctx:
             raise RuntimeError("не удалось подключиться к области кадров")
@@ -128,6 +134,9 @@ class Canvas:
         if self._ctx:
             self._library.ec_close(self._ctx)
             self._ctx = None
+        if self._mapping is not None:
+            self._mapping.close()
+            self._mapping = None
 
     def __enter__(self):
         return self
@@ -179,10 +188,29 @@ def canvas():
             "графика недоступна: программа запущена без канвы"
         )
 
-    _canvas = Canvas(
-        address=int(os.environ[_ENV_ADDRESS]),
-        size=int(os.environ[_ENV_SIZE]),
-        width=int(os.environ[_ENV_WIDTH]),
-        height=int(os.environ[_ENV_HEIGHT]),
-    )
+    size = int(os.environ[_ENV_SIZE])
+    width = int(os.environ[_ENV_WIDTH])
+    height = int(os.environ[_ENV_HEIGHT])
+
+    if _ENV_PATH in os.environ:
+        # Десктоп: область — файл, и отображать его должен тот, кто в него
+        # пишет. Адрес чужого процесса здесь ничего не значит.
+        mapping = _map_file(os.environ[_ENV_PATH], size)
+        address = ctypes.addressof(ctypes.c_char.from_buffer(mapping))
+        _canvas = Canvas(address, size, width, height, mapping)
+    else:
+        # Android: область уже отображена вызывающим, нам дали её адрес.
+        _canvas = Canvas(int(os.environ[_ENV_ADDRESS]), size, width, height)
+
     return _canvas
+
+
+def _map_file(path, size):
+    import mmap
+
+    handle = open(path, "r+b")
+    try:
+        return mmap.mmap(handle.fileno(), size)
+    finally:
+        # Отображение живёт независимо от дескриптора.
+        handle.close()

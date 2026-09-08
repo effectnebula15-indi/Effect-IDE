@@ -142,7 +142,10 @@ val stagePythonAssets = tasks.register<StagePython>("stagePythonAssets") {
     prefix.set(pythonPrefix)
     spec.set("assets")
     pythonXY.set(pyXY)
-    shim.set(layout.projectDirectory.dir("src/main/python"))
+    // Шим лежит рядом с библиотекой, которую оборачивает, а не в модуле
+    // Android: сам он платформы не знает, и десктопная проверка берёт его
+    // оттуда же.
+    shim.set(rootProject.layout.projectDirectory.dir("native/canvas/python"))
     dependsOn(unpackPython)
 }
 

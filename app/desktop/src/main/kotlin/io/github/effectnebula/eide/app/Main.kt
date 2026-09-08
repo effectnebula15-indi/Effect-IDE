@@ -14,11 +14,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,7 @@ import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
+import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
 import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
 import io.github.effectnebula.eide.runner.LocalPythonBackend
 import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
@@ -128,6 +131,17 @@ private fun BenchmarkOnly(seconds: Int) {
 @Composable
 private fun DesktopShell() {
     var showBenchmark by remember { mutableStateOf(false) }
+    var showCanvas by remember { mutableStateOf(Debug.showCanvas) }
+
+    // Взводится на Run и снимается первым же показом — как на Android и по той
+    // же причине: иначе уйти с вкладки графики при работающей программе нельзя,
+    // следующий кадр вернёт обратно.
+    var awaitingFirstFrame by remember { mutableStateOf(false) }
+
+    // Область кадров переживает несколько запусков: раннер одноразовый, а канва
+    // — нет. Создаётся один раз на всё приложение.
+    val canvas = remember { runCatching { DesktopCanvasArea.create() }.getOrNull() }
+    DisposableEffect(canvas) { onDispose { canvas?.close() } }
 
     val workspace = remember {
         // -Deide.project=/путь открывает чужую папку; по умолчанию — та, из
@@ -145,6 +159,25 @@ private fun DesktopShell() {
 
     val active = workspace.active
 
+    /*
+     * Переключаемся на графику сами, когда программа нарисовала первый кадр.
+     * Заранее знать, графическая ли она, нельзя, а заставлять жать вторую
+     * кнопку после Run — значит, что первый запуск выглядит как «ничего не
+     * произошло». Проверка дешёвая: номер кадра читается без копирования.
+     */
+    LaunchedEffect(canvas, awaitingFirstFrame) {
+        if (canvas == null || !awaitingFirstFrame) return@LaunchedEffect
+        val before = canvas.latestFrame()
+        while (true) {
+            withFrameNanos { }
+            if (canvas.latestFrame() > before) {
+                awaitingFirstFrame = false
+                showCanvas = true
+                return@LaunchedEffect
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize().background(Eide.colors.background)) {
         Row(
             Modifier
@@ -153,13 +186,27 @@ private fun DesktopShell() {
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Tab("редактор", !showBenchmark) { showBenchmark = false }
-            Tab("отрисовка · P2", showBenchmark) { showBenchmark = true }
+            Tab("редактор", !showBenchmark && !showCanvas) {
+                showBenchmark = false
+                showCanvas = false
+            }
+            if (canvas != null) {
+                Tab("графика", showCanvas) { showCanvas = true }
+            }
+            Tab("отрисовка · P2", showBenchmark) {
+                showBenchmark = true
+                showCanvas = false
+            }
         }
 
         if (showBenchmark) {
             val document = remember { benchmarkDocument() }
             RenderBenchmark(document, Modifier.weight(1f))
+            return@Column
+        }
+
+        if (showCanvas && canvas != null) {
+            CanvasView(canvas, Modifier.weight(1f))
             return@Column
         }
 
@@ -184,7 +231,13 @@ private fun DesktopShell() {
                     onClose = { workspace.saveModified(); workspace.close(it.file); revision++ },
                 )
 
-                RunPanel(workspace, active) { revision++ }
+                RunPanel(
+                    workspace = workspace,
+                    active = active,
+                    canvas = canvas,
+                    onRunStarted = { awaitingFirstFrame = true },
+                    onChanged = { revision++ },
+                )
             }
         }
     }
@@ -201,6 +254,8 @@ private fun DesktopShell() {
 private fun RunPanel(
     workspace: Workspace,
     active: io.github.effectnebula.eide.core.project.OpenFile?,
+    canvas: DesktopCanvasArea?,
+    onRunStarted: () -> Unit,
     onChanged: () -> Unit,
 ) {
     var output by remember { mutableStateOf("") }
@@ -220,6 +275,7 @@ private fun RunPanel(
         val target = active ?: return
         workspace.saveModified()
         onChanged()
+        onRunStarted()
 
         output = ""
         status = "запускаю…"
@@ -230,6 +286,12 @@ private fun RunPanel(
                 script = target.file,
                 workDir = workspace.tree.root,
                 limits = RunLimits(timeoutMillis = 30_000, maxResidentBytes = 512L * 1024 * 1024),
+                // Шим и библиотеку программа находит через окружение: знать,
+                // что означают эти переменные, бэкенду не нужно.
+                environment = buildMap {
+                    canvas?.let { putAll(it.environment(Debug.canvasLibrary)) }
+                    Debug.shimDirectory?.let { put("PYTHONPATH", it) }
+                },
             ),
             object : RunListener {
                 override fun onStarted(pid: Int) = onMain { status = "работает, процесс $pid" }
@@ -328,6 +390,20 @@ private object Debug {
 
     /** `-Deide.run` — запустить открытый файл сразу. */
     val autoRun: Boolean get() = System.getProperty("eide.run") != null
+
+    /** `-Deide.canvas` — открыть вкладку графики сразу. */
+    val showCanvas: Boolean get() = System.getProperty("eide.canvas") != null
+
+    /**
+     * Где лежит libeide_canvas.so и шим на Python.
+     *
+     * Пока задаются снаружи: в собранном дистрибутиве они поедут вместе с
+     * приложением, и это отдельная работа по упаковке нативных библиотек под
+     * три системы (риск R6 в плане). До неё графика на десктопе работает при
+     * запуске из исходников.
+     */
+    val canvasLibrary: String? get() = System.getProperty("eide.canvasLib")
+    val shimDirectory: String? get() = System.getProperty("eide.shimDir")
 }
 
 /**

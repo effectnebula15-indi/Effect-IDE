@@ -115,7 +115,7 @@ val canvasShim = tasks.register<Exec>("canvasShimTest") {
 
     val buildDir = layout.buildDirectory.dir("native-canvas/shim")
     inputs.dir(canvasDir)
-    inputs.file(layout.projectDirectory.file("runner/android/src/main/python/eide.py"))
+    inputs.file(canvasDir.file("python/eide.py"))
     outputs.dir(buildDir)
 
     // PYTHONDONTWRITEBYTECODE не для чистоты: инвалидация .pyc идёт по времени
@@ -129,6 +129,23 @@ val canvasShim = tasks.register<Exec>("canvasShimTest") {
         "cmake -S ${canvasDir.asFile} -B ${buildDir.get().asFile} -DCMAKE_BUILD_TYPE=Release && " +
             "cmake --build ${buildDir.get().asFile} && " +
             "python3 ${canvasDir.file("test/test_shim.py").asFile}"
+    )
+}
+
+// Библиотека для десктопных проверок: её грузит и Python через ctypes, и
+// сквозной тест графики. Отдельной задачей, чтобы путь был предсказуем.
+val canvasLibrary = tasks.register<Exec>("canvasLibrary") {
+    group = "build"
+    description = "Собирает libeide_canvas.so для десктопа."
+
+    val buildDir = layout.buildDirectory.dir("native-canvas/lib")
+    inputs.dir(canvasDir)
+    outputs.dir(buildDir)
+
+    commandLine(
+        "sh", "-c",
+        "cmake -S ${canvasDir.asFile} -B ${buildDir.get().asFile} -DCMAKE_BUILD_TYPE=Release && " +
+            "cmake --build ${buildDir.get().asFile}"
     )
 }
 
