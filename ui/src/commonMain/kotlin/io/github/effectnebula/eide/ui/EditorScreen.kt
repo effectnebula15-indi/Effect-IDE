@@ -88,7 +88,7 @@ private fun Status(text: String) {
         style = TextStyle(
             color = Eide.colors.textDim,
             fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = Eide.editorFont,
         ),
     )
 }

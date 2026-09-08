@@ -78,4 +78,8 @@ val LocalEideColors = staticCompositionLocalOf { EideDarkColors }
 object Eide {
     val colors: EideColors
         @Composable @ReadOnlyComposable get() = LocalEideColors.current
+
+    /** Шрифт кода: JetBrains Mono, если точка сборки его подставила. */
+    val editorFont: androidx.compose.ui.text.font.FontFamily
+        @Composable @ReadOnlyComposable get() = LocalEditorFont.current
 }

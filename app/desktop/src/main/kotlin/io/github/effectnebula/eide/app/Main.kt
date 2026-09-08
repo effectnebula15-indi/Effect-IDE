@@ -37,6 +37,8 @@ import io.github.effectnebula.eide.ui.benchmarkDocument
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.theme.Eide
+import io.github.effectnebula.eide.ui.theme.LocalEditorFont
+import androidx.compose.runtime.CompositionLocalProvider
 import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.Toolkit
@@ -73,10 +75,12 @@ fun main() = application {
             }
         }
 
-        if (benchmarkSeconds != null) {
-            BenchmarkOnly(benchmarkSeconds)
-        } else {
-            DesktopShell()
+        CompositionLocalProvider(LocalEditorFont provides remember { jetBrainsMono() }) {
+            if (benchmarkSeconds != null) {
+                BenchmarkOnly(benchmarkSeconds)
+            } else {
+                DesktopShell()
+            }
         }
     }
 }

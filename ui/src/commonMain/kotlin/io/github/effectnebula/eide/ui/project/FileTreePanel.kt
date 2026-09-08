@@ -121,7 +121,7 @@ private fun TreeLine(
 private fun Line(text: String, color: androidx.compose.ui.graphics.Color) {
     BasicText(
         text = text,
-        style = TextStyle(color = color, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+        style = TextStyle(color = color, fontSize = 13.sp, fontFamily = Eide.editorFont),
     )
 }
 

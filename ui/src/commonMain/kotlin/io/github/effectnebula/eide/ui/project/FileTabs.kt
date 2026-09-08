@@ -89,6 +89,6 @@ private fun Label(
     BasicText(
         text = text,
         modifier = modifier,
-        style = TextStyle(color = color, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+        style = TextStyle(color = color, fontSize = 13.sp, fontFamily = Eide.editorFont),
     )
 }

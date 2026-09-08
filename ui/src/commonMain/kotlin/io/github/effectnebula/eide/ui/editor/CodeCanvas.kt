@@ -20,11 +20,11 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.text.Rope
+import io.github.effectnebula.eide.ui.theme.Eide
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -56,8 +56,11 @@ fun CodeCanvas(
     stats: CodeCanvasStats? = null,
 ) {
     val measurer = rememberTextMeasurer()
-    val style = remember(fontSizeSp) {
-        TextStyle(fontSize = fontSizeSp.sp, fontFamily = FontFamily.Monospace)
+    // Шрифт тот же, что в редакторе: замер отрисовки другим шрифтом меряет не то,
+    // что потом увидит человек — ширина глифов и хинтинг у шрифтов разные.
+    val font = Eide.editorFont
+    val style = remember(fontSizeSp, font) {
+        TextStyle(fontSize = fontSizeSp.sp, fontFamily = font)
     }
 
     // Кэш переживает пересборку и правки документа: ключ — текст строки.

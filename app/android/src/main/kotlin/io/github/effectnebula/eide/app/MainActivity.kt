@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,6 +55,7 @@ import io.github.effectnebula.eide.ui.editor.ExtraKeyRow
 import io.github.effectnebula.eide.ui.editorColors
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
+import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -95,6 +97,14 @@ private enum class Screen { Project, Code, Render }
 
 @Composable
 private fun App() {
+    val context = LocalContext.current
+    val font = remember(context) { jetBrainsMono(context.assets) }
+
+    CompositionLocalProvider(LocalEditorFont provides font) { Shell() }
+}
+
+@Composable
+private fun Shell() {
     var screen by remember { mutableStateOf(Screen.Code) }
 
     // Область кадров переживает несколько запусков: раннер одноразовый, а

@@ -32,13 +32,13 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.text.Rope
+import io.github.effectnebula.eide.ui.theme.Eide
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -74,8 +74,9 @@ fun CodeEditor(
     fontSizeSp: Float = 13f,
 ) {
     val measurer = rememberTextMeasurer()
-    val style = remember(fontSizeSp) {
-        TextStyle(fontSize = fontSizeSp.sp, fontFamily = FontFamily.Monospace)
+    val font = Eide.editorFont
+    val style = remember(fontSizeSp, font) {
+        TextStyle(fontSize = fontSizeSp.sp, fontFamily = font)
     }
     val cache = remember { LineLayoutCache<TextLayoutResult>() }
     val focusRequester = remember { FocusRequester() }

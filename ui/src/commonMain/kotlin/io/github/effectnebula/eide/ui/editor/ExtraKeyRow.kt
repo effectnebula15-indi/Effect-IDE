@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.editor.MoveTo
 
@@ -76,7 +77,7 @@ fun ExtraKeyRow(
                     style = TextStyle(
                         color = colors.text,
                         fontSize = 15.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = Eide.editorFont,
                         textAlign = TextAlign.Center,
                     ),
                 )

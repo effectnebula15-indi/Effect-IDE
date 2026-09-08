@@ -2,6 +2,14 @@ plugins {
     id("eide.android-application")
 }
 
+// Шрифты лежат в корне репозитория, а не в модуле: их два потребителя, и
+// копия для каждого рассинхронизируется при первом же обновлении.
+androidComponents.onVariants { variant ->
+    variant.sources.assets?.addStaticSourceDirectory(
+        rootProject.layout.projectDirectory.dir("assets").asFile.absolutePath
+    )
+}
+
 android {
     namespace = "io.github.effectnebula.eide"
 
