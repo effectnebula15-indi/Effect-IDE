@@ -35,7 +35,7 @@ class CodeEditorGeometryTest {
     fun `tap picks the line under the finger`() {
         val rope = text("first", "second", "third")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, position = Offset(gutter + 5f, 25f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(gutter + 5f, 25f))
 
         assertEquals(1, rope.lineOf(offset), "палец во второй строке, а попали не туда")
     }
@@ -45,7 +45,7 @@ class CodeEditorGeometryTest {
         val rope = text("one", "two", "three", "four", "five")
 
         // Прокрутили на две строки: верх экрана это третья строка.
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 40f, position = Offset(gutter + 5f, 5f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 40f, scrollXPx = 0f, position = Offset(gutter + 5f, 5f))
 
         assertEquals(2, rope.lineOf(offset))
     }
@@ -54,7 +54,7 @@ class CodeEditorGeometryTest {
     fun `tap past the end of a line stops at its end`() {
         val rope = text("ab", "longer line")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, position = Offset(gutter + 500f, 5f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(gutter + 500f, 5f))
 
         assertEquals(2, offset, "курсор уехал за конец строки")
     }
@@ -63,7 +63,7 @@ class CodeEditorGeometryTest {
     fun `tap on the gutter lands at the line start`() {
         val rope = text("first", "second")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, position = Offset(5f, 25f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(5f, 25f))
 
         assertEquals(rope.lineStart(1), offset)
     }
@@ -72,9 +72,23 @@ class CodeEditorGeometryTest {
     fun `tap below the last line stops at the last line`() {
         val rope = text("one", "two")
 
-        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, position = Offset(gutter + 5f, 5000f))
+        val offset = offsetAt(rope, metrics, gutter, scrollPx = 0f, scrollXPx = 0f, position = Offset(gutter + 5f, 5000f))
 
         assertEquals(1, rope.lineOf(offset), "тап в пустоту под текстом ушёл за пределы документа")
+    }
+
+    @Test
+    fun `tap accounts for horizontal scrolling`() {
+        val rope = text("0123456789abcdef")
+
+        // Уехали вправо на пять знаков: у левого края текста стоит шестой.
+        val offset = offsetAt(
+            rope, metrics, gutter,
+            scrollPx = 0f, scrollXPx = 5 * metrics.digitWidth,
+            position = Offset(gutter + 1f, 5f),
+        )
+
+        assertEquals(5, offset)
     }
 
     // --- прокрутка за курсором -------------------------------------------------
@@ -119,6 +133,48 @@ class CodeEditorGeometryTest {
         val state = editorAt(0, "one")
 
         assertEquals(123f, scrollToCaret(state, metrics, scrollPx = 123f, viewportHeight = 0))
+    }
+
+    // --- горизонтальная прокрутка за курсором ----------------------------------
+
+    @Test
+    fun `visible caret does not move the viewport sideways`() {
+        val state = editorAt(3, "0123456789")
+
+        assertEquals(0f, scrollXToCaret(state, metrics, scrollXPx = 0f, textWidth = 200f))
+    }
+
+    @Test
+    fun `caret past the right edge scrolls just enough`() {
+        val state = editorAt(30, "0".repeat(100))
+
+        val scroll = scrollXToCaret(state, metrics, scrollXPx = 0f, textWidth = 200f)
+
+        // Курсор в 31-й колонке должен встать у правого края, а не в середине.
+        assertEquals(31 * metrics.digitWidth - 200f, scroll)
+    }
+
+    @Test
+    fun `caret left of the viewport scrolls back to it`() {
+        val state = editorAt(2, "0".repeat(100))
+
+        assertEquals(2 * metrics.digitWidth, scrollXToCaret(state, metrics, scrollXPx = 500f, textWidth = 200f))
+    }
+
+    @Test
+    fun `a caret on the next line resets the sideways scroll`() {
+        // Переход на короткую строку не должен оставлять экран уехавшим вправо:
+        // человек смотрит на пустоту и не понимает, куда делся текст.
+        val state = editorAt(101, "0".repeat(100), "x")
+
+        assertEquals(0f, scrollXToCaret(state, metrics, scrollXPx = 500f, textWidth = 200f))
+    }
+
+    @Test
+    fun `zero width leaves sideways scrolling alone`() {
+        val state = editorAt(0, "one")
+
+        assertEquals(77f, scrollXToCaret(state, metrics, scrollXPx = 77f, textWidth = 0f))
     }
 
     @Test

@@ -26,6 +26,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -113,8 +114,17 @@ fun CodeEditor(
     }
 
     var scrollPx by remember { mutableFloatStateOf(0f) }
+    var scrollXPx by remember { mutableFloatStateOf(0f) }
     var viewportHeight by remember { mutableIntStateOf(0) }
+    var viewportWidth by remember { mutableIntStateOf(0) }
     var caretVisible by remember { mutableStateOf(true) }
+
+    // Ширина самой длинной строки, которую довелось разметить. Настоящий максимум
+    // по документу стоил бы прохода по всему файлу на каждый кадр, поэтому граница
+    // прокрутки растёт по мере того, как длинные строки попадаются на глаза.
+    // Цена: побывав на длинной строке, вправо можно уехать в пустоту и на коротких.
+    // Так же ведут себя все редакторы, которые я видел.
+    var widestLinePx by remember { mutableFloatStateOf(0f) }
 
     val revision = rememberEditorRevision(state)
 
@@ -125,6 +135,13 @@ fun CodeEditor(
         val previous = scrollPx
         scrollPx = (scrollPx - delta).coerceIn(0f, maxScrollPx(state, metrics, viewportHeight))
         previous - scrollPx
+    }
+
+    val horizontalScrollState = rememberScrollableState { delta ->
+        val previous = scrollXPx
+        val limit = max(0f, gutterWidthPx(state.text.lineCount, metrics) + widestLinePx - viewportWidth)
+        scrollXPx = (scrollXPx - delta).coerceIn(0f, limit)
+        previous - scrollXPx
     }
 
     // Реакция на любое изменение: догнать курсор прокруткой и перезапустить
@@ -142,6 +159,10 @@ fun CodeEditor(
     LaunchedEffect(revision) {
         snapshotFlow { revision.longValue }.collectLatest {
             scrollPx = scrollToCaret(state, metrics, scrollPx, viewportHeight)
+            scrollXPx = scrollXToCaret(
+                state, metrics, scrollXPx,
+                viewportWidth - gutterWidthPx(state.text.lineCount, metrics),
+            )
             caretVisible = true
             while (true) {
                 delay(CARET_BLINK_MS)
@@ -165,7 +186,9 @@ fun CodeEditor(
                     val text = state.text
                     val gutter = gutterWidthPx(text.lineCount, metrics)
                     state.setCarets(
-                        CaretSet.single(offsetAt(text, metrics, gutter, scrollPx, position))
+                        CaretSet.single(
+                            offsetAt(text, metrics, gutter, scrollPx, scrollXPx, position)
+                        )
                     )
                     runCatching { focusRequester.requestFocus() }
                     // Тап по тексту — просьба печатать. Клавиатуру, закрытую
@@ -207,25 +230,31 @@ fun CodeEditor(
             Modifier
                 .fillMaxSize()
                 .scrollable(scrollState, Orientation.Vertical)
+                .scrollable(horizontalScrollState, Orientation.Horizontal)
                 .then(input)
         ) {
             viewportHeight = size.height.roundToInt()
+            viewportWidth = size.width.roundToInt()
             // Чтение ревизии в фазе отрисовки — это подписка: правка перерисует
             // холст, не трогая пересборку.
             revision.longValue
-            drawEditor(
-                state = state,
-                measurer = measurer,
-                style = style,
-                cache = cache,
-                colors = colors,
-                metrics = metrics,
-                gutterWidth = gutterWidthPx(state.text.lineCount, metrics),
-                scrollPx = scrollPx,
-                caretVisible = caretVisible,
-                search = search,
-                highlighter = highlighter,
-                lineStates = lineStates,
+            widestLinePx = max(
+                widestLinePx,
+                drawEditor(
+                    state = state,
+                    measurer = measurer,
+                    style = style,
+                    cache = cache,
+                    colors = colors,
+                    metrics = metrics,
+                    gutterWidth = gutterWidthPx(state.text.lineCount, metrics),
+                    scrollPx = scrollPx,
+                    scrollXPx = scrollXPx,
+                    caretVisible = caretVisible,
+                    search = search,
+                    highlighter = highlighter,
+                    lineStates = lineStates,
+                ),
             )
             probe?.let {
                 it.cacheHits = cache.hits
@@ -265,6 +294,7 @@ private fun gutterWidthPx(lineCount: Int, metrics: LineMetrics): Float {
 private fun maxScrollPx(state: EditorState, metrics: LineMetrics, viewportHeight: Int): Float =
     max(0f, state.text.lineCount * metrics.height - viewportHeight / 2f)
 
+/** Рисует видимые строки и возвращает ширину самой широкой из них. */
 private fun DrawScope.drawEditor(
     state: EditorState,
     measurer: TextMeasurer,
@@ -274,13 +304,14 @@ private fun DrawScope.drawEditor(
     metrics: LineMetrics,
     gutterWidth: Float,
     scrollPx: Float,
+    scrollXPx: Float,
     caretVisible: Boolean,
     search: SearchSession?,
     highlighter: LineHighlighter,
     lineStates: LineStates,
-) {
+): Float {
     val text = state.text
-    if (metrics.height <= 0f) return
+    if (metrics.height <= 0f) return 0f
 
     val first = (scrollPx / metrics.height).toInt().coerceAtLeast(0)
     val visible = (size.height / metrics.height).roundToInt() + 2
@@ -294,61 +325,87 @@ private fun DrawScope.drawEditor(
         search.matchesIn(text.lineStart(first), text.lineEnd(last - 1))
     }
 
-    val textWidth = (size.width - gutterWidth).coerceAtLeast(1f)
-    val constraints = Constraints(maxWidth = textWidth.roundToInt())
-
     drawRect(colors.gutterBackground, size = Size(gutterWidth, size.height))
 
     val caretLines = state.carets.carets.map { text.lineOf(it.head) }.toSet()
 
+    // Правый край видимой части в координатах текста: выделение, захватившее
+    // перенос строки, тянется до него, а не до края холста — иначе при сдвиге
+    // вправо полоса обрывается посреди экрана.
+    val rightEdge = scrollXPx + size.width
+    var widest = 0f
+
+    // Текст обрезается по гаттеру: уезжая влево, он обязан скрываться под ним,
+    // а не поверх номеров строк.
+    clipRect(left = gutterWidth) {
+        translate(left = -scrollXPx, top = -scrollPx) {
+            for (line in first until last) {
+                val top = line * metrics.height
+                val lineStart = text.lineStart(line)
+                val lineEnd = text.lineEnd(line)
+                val lineText = text.substring(lineStart, lineEnd)
+
+                // Состояние входит в ключ кэша: строка внутри докстринга и такая же
+                // снаружи выглядят одинаково, а красятся по-разному.
+                val stateBefore = lineStates.stateBefore(state.document, line)
+                val key = if (stateBefore == 0) lineText else "$stateBefore\u0000$lineText"
+
+                val layout = cache.get(key) {
+                    // Без переноса и без ограничения ширины. Перенос сломал бы всю
+                    // арифметику: высота строки здесь постоянная, и перенесённый
+                    // хвост рисовался бы поверх следующей строки. Цена — разметка
+                    // строки целиком, какой бы длинной она ни была; на файле из
+                    // одной строки в мегабайт это будет заметно.
+                    measurer.measure(
+                        highlighted(lineText, stateBefore, highlighter, colors),
+                        style,
+                        softWrap = false,
+                        constraints = Constraints(),
+                    )
+                }
+                widest = max(widest, layout.size.width.toFloat())
+
+                for (match in matches) {
+                    drawRange(
+                        colors.searchMatch, metrics, gutterWidth, layout,
+                        lineStart, lineEnd, top, match.start, match.end, rightEdge,
+                    )
+                }
+
+                drawSelection(
+                    state, colors, metrics, gutterWidth, layout,
+                    lineStart, lineEnd, top, rightEdge,
+                )
+
+                // Без color: цвета берутся из кусков разметки, а перекрытие сверху
+                // покрасило бы всю строку одинаково.
+                drawText(layout, topLeft = Offset(gutterWidth, top))
+
+                if (caretVisible) {
+                    drawCarets(state, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
+                }
+            }
+        }
+    }
+
+    // Гаттер рисуется отдельно и без горизонтального сдвига: это неподвижный
+    // столбец, и уезжать вместе с текстом он не должен.
     translate(top = -scrollPx) {
         for (line in first until last) {
-            val top = line * metrics.height
-            val lineStart = text.lineStart(line)
-            val lineEnd = text.lineEnd(line)
-            val lineText = text.substring(lineStart, lineEnd)
-
-            // Состояние входит в ключ кэша: строка внутри докстринга и такая же
-            // снаружи выглядят одинаково, а красятся по-разному.
-            val stateBefore = lineStates.stateBefore(state.document, line)
-            val key = if (stateBefore == 0) lineText else "$stateBefore\u0000$lineText"
-
-            val layout = cache.get(key) {
-                measurer.measure(
-                    highlighted(lineText, stateBefore, highlighter, colors),
-                    style,
-                    constraints = constraints,
-                )
-            }
-
-            for (match in matches) {
-                drawRange(
-                    colors.searchMatch, metrics, gutterWidth, layout,
-                    lineStart, lineEnd, top, match.start, match.end,
-                )
-            }
-
-            drawSelection(state, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
-
-            // Номер прижат вправо: столбец цифр не пляшет при переходе через
-            // десяток, сотню и тысячу.
             val number = (line + 1).toString()
             val numberLayout = cache.get(GUTTER_KEY_PREFIX + number) { measurer.measure(number, style) }
             drawText(
                 numberLayout,
                 color = if (line in caretLines) colors.currentLineGutterText else colors.gutterText,
-                topLeft = Offset(gutterWidth - numberLayout.size.width - metrics.digitWidth, top),
+                topLeft = Offset(
+                    gutterWidth - numberLayout.size.width - metrics.digitWidth,
+                    line * metrics.height,
+                ),
             )
-
-            // Без color: цвета берутся из кусков разметки, а перекрытие сверху
-            // покрасило бы всю строку одинаково.
-            drawText(layout, topLeft = Offset(gutterWidth, top))
-
-            if (caretVisible) {
-                drawCarets(state, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
-            }
         }
     }
+
+    return widest
 }
 
 private fun DrawScope.drawSelection(
@@ -360,12 +417,13 @@ private fun DrawScope.drawSelection(
     lineStart: Int,
     lineEnd: Int,
     top: Float,
+    rightEdge: Float,
 ) {
     for (caret in state.carets.carets) {
         if (caret.isEmpty) continue
         drawRange(
             colors.selection, metrics, gutterWidth, layout,
-            lineStart, lineEnd, top, caret.start, caret.end,
+            lineStart, lineEnd, top, caret.start, caret.end, rightEdge,
         )
     }
 }
@@ -386,6 +444,7 @@ private fun DrawScope.drawRange(
     top: Float,
     from: Int,
     to: Int,
+    rightEdge: Float,
 ) {
     if (to < lineStart || from > lineEnd) return
 
@@ -397,7 +456,7 @@ private fun DrawScope.drawRange(
     val right = gutterWidth + layout.getHorizontalPosition(end, usePrimaryDirection = true)
     // Диапазон, захвативший перенос строки, тянем до края: иначе не видно, что
     // выбрана строка целиком.
-    val extended = if (to > lineEnd) size.width else right
+    val extended = if (to > lineEnd) rightEdge else right
 
     drawRect(
         color = color,
@@ -463,6 +522,7 @@ internal fun offsetAt(
     metrics: LineMetrics,
     gutterWidth: Float,
     scrollPx: Float,
+    scrollXPx: Float,
     position: Offset,
 ): Int {
     val line = ((position.y + scrollPx) / metrics.height).toInt().coerceIn(0, text.lineCount - 1)
@@ -470,8 +530,37 @@ internal fun offsetAt(
     val lineEnd = text.lineEnd(line)
 
     // Колонка считается по ширине цифры: шрифт моноширинный, все знаки одинаковы.
-    val column = ((position.x - gutterWidth) / metrics.digitWidth).roundToInt().coerceAtLeast(0)
+    val x = position.x - gutterWidth + scrollXPx
+    val column = (x / metrics.digitWidth).roundToInt().coerceAtLeast(0)
     return (lineStart + column).coerceIn(lineStart, lineEnd)
+}
+
+/**
+ * Сдвигает по горизонтали так, чтобы курсор остался виден.
+ *
+ * Позиция курсора считается по ширине цифры, а не по разметке строки: разметка
+ * живёт в фазе отрисовки, а сюда приходят из обработчиков ввода. Для
+ * моноширинного шрифта это одно и то же — ровно то же допущение, на котором
+ * стоит попадание тапа.
+ */
+internal fun scrollXToCaret(
+    state: EditorState,
+    metrics: LineMetrics,
+    scrollXPx: Float,
+    textWidth: Float,
+): Float {
+    if (textWidth <= 0f || metrics.digitWidth <= 0f) return scrollXPx
+
+    val caret = state.carets.primary.head
+    val column = caret - state.text.lineStart(state.text.lineOf(caret))
+    val left = column * metrics.digitWidth
+    val right = left + metrics.digitWidth
+
+    return when {
+        left < scrollXPx -> left
+        right > scrollXPx + textWidth -> right - textWidth
+        else -> scrollXPx
+    }
 }
 
 /** Прокручивает так, чтобы курсор остался виден. */
