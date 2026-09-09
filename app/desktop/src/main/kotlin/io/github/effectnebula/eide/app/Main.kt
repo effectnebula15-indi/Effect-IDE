@@ -52,6 +52,10 @@ import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
 import io.github.effectnebula.eide.ui.DEFAULT_FONT_SIZE_SP
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.editor.AutoSave
+import io.github.effectnebula.eide.ui.editor.GutterMark
+import io.github.effectnebula.eide.ui.editor.rememberGutterMarks
+import io.github.effectnebula.eide.vcs.GitRepository
+import io.github.effectnebula.eide.vcs.LineMark
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkEditor
 import io.github.effectnebula.eide.ui.project.FileTabs
@@ -158,6 +162,11 @@ private fun DesktopShell() {
     val canvas = remember { runCatching { DesktopCanvasArea.create() }.getOrNull() }
     DisposableEffect(canvas) { onDispose { canvas?.close() } }
 
+    // Репозиторий открывается один раз на проект. Его отсутствие — обычное дело,
+    // а не ошибка: папка вполне может не быть репозиторием.
+    val git = remember { runCatching { GitRepository.open(workspaceRoot()) }.getOrNull() }
+    DisposableEffect(git) { onDispose { git?.close() } }
+
     val startup = remember { startWorkspace() }
     val workspace = startup.workspace
     var notice by remember { mutableStateOf(startup.failure) }
@@ -250,11 +259,42 @@ private fun DesktopShell() {
                     workspace = workspace,
                     active = active,
                     canvas = canvas,
+                    git = git,
                     fontSizeSp = fontSize,
                     onFontSizeChange = { fontSize = it },
                     onRunStarted = { awaitingFirstFrame = true },
                     onChanged = { revision++ },
                 )
+            }
+        }
+    }
+}
+
+/** Корень проекта: то же, что видит дерево файлов. */
+private fun workspaceRoot(): File = File(Debug.project ?: System.getProperty("user.dir"))
+
+/**
+ * Перевод пометок git в пометки редактора, или null если репозитория нет.
+ *
+ * Здесь же граница модулей: `:ui` про git не знает, `:vcs` — про редактор.
+ * Точка сборки знает про оба, и это её работа (ADR-006).
+ *
+ * Считается в фоновом потоке: сравнение с HEAD — это чтение объекта из
+ * хранилища и дифф, и на главном потоке ему делать нечего.
+ */
+private fun gitMarks(git: GitRepository?, file: File): (suspend (String) -> Map<Int, GutterMark>)? {
+    if (git == null) return null
+    val path = runCatching { file.relativeTo(git.workTree).invariantSeparatorsPath }.getOrNull()
+        ?: return null
+
+    return { text ->
+        withContext(Dispatchers.IO) {
+            runCatching { git.gutterMarks(path, text) }.getOrDefault(emptyMap()).mapValues { (_, mark) ->
+                when (mark) {
+                    LineMark.Added -> GutterMark.Added
+                    LineMark.Modified -> GutterMark.Modified
+                    LineMark.DeletedBelow -> GutterMark.DeletedBelow
+                }
             }
         }
     }
@@ -312,6 +352,7 @@ private fun RunPanel(
     workspace: Workspace,
     active: io.github.effectnebula.eide.core.project.OpenFile?,
     canvas: DesktopCanvasArea?,
+    git: GitRepository?,
     fontSizeSp: Float,
     onFontSizeChange: (Float) -> Unit,
     onRunStarted: () -> Unit,
@@ -430,6 +471,8 @@ private fun RunPanel(
         }
 
         if (active != null) {
+            val marks = rememberGutterMarks(active.state, compute = gitMarks(git, active.file))
+
             // То же автосохранение, что на телефоне. Десктоп не убивают внезапно,
             // но правило «сначала десктоп» тут было нарушено: поведение писалось
             // и проверялось на Android, а увидеть его можно только здесь.
@@ -445,6 +488,7 @@ private fun RunPanel(
                 highlighter = Highlighters.forFile(active.name),
                 fontSizeSp = fontSizeSp,
                 onFontSizeChange = onFontSizeChange,
+                gutterMarks = marks.value,
             )
         } else {
             Box(Modifier.weight(1f).padding(16.dp)) {

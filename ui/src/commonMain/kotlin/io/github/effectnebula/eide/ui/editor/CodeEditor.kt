@@ -64,6 +64,8 @@ data class EditorColors(
     val caret: Color,
     /** Подсветка совпадений поиска. Под выделением, поэтому заметно бледнее. */
     val searchMatch: Color,
+    /** Полоски правок в гаттере. Пусто — пометки не рисуются вовсе. */
+    val vcs: Map<GutterMark, Color> = emptyMap(),
     /** Цвета подсветки синтаксиса по видам кусков. */
     val syntax: Map<TokenKind, Color> = emptyMap(),
 )
@@ -86,6 +88,8 @@ fun CodeEditor(
     fontSizeSp: Float = 13f,
     search: SearchSession? = null,
     highlighter: LineHighlighter = LineHighlighter.None,
+    /** Пометки правок по номерам строк — см. [rememberGutterMarks]. */
+    gutterMarks: Map<Int, GutterMark> = emptyMap(),
     /**
      * Куда сообщать новый размер шрифта, выбранный двумя пальцами. `null` —
      * жест не подключается: размер задаёт тот, кто рисует редактор.
@@ -299,6 +303,7 @@ fun CodeEditor(
                     scrollXPx = scrollXPx,
                     caretVisible = caretVisible,
                     search = search,
+                    gutterMarks = gutterMarks,
                 ),
             )
             probe?.let {
@@ -315,6 +320,8 @@ internal data class LineMetrics(val height: Float, val digitWidth: Float)
 private const val CARET_BLINK_MS = 530L
 private const val CARET_WIDTH_PX = 2f
 private const val GUTTER_PADDING_DIGITS = 2
+private const val VCS_MARK_WIDTH_PX = 3f
+private const val DELETED_MARK_HEIGHT_PX = 2f
 
 /**
  * Разделитель ключей кэша: номера строк и текст строк не должны сталкиваться.
@@ -353,6 +360,7 @@ private fun DrawScope.drawEditor(
     scrollXPx: Float,
     caretVisible: Boolean,
     search: SearchSession?,
+    gutterMarks: Map<Int, GutterMark>,
 ): Float {
     val text = state.text
     if (metrics.height <= 0f) return 0f
@@ -418,6 +426,8 @@ private fun DrawScope.drawEditor(
     // столбец, и уезжать вместе с текстом он не должен.
     translate(top = -scrollPx) {
         for (line in first until last) {
+            drawGutterMark(gutterMarks[line], colors, metrics, line * metrics.height)
+
             val number = (line + 1).toString()
             val numberLayout = cache.get(GUTTER_KEY_PREFIX + number) { measurer.measure(number, style) }
             drawText(
@@ -432,6 +442,36 @@ private fun DrawScope.drawEditor(
     }
 
     return widest
+}
+
+/**
+ * Полоска правки у левого края гаттера.
+ *
+ * Удаление рисуется тонкой чертой по нижней границе строки, а не полосой:
+ * удалённых строк в тексте нет, помечать нечего — помечается место, где они были.
+ */
+private fun DrawScope.drawGutterMark(
+    mark: GutterMark?,
+    colors: EditorColors,
+    metrics: LineMetrics,
+    top: Float,
+) {
+    val color = colors.vcs[mark ?: return] ?: return
+
+    if (mark == GutterMark.DeletedBelow) {
+        drawRect(
+            color = color,
+            topLeft = Offset(0f, top + metrics.height - DELETED_MARK_HEIGHT_PX),
+            size = Size(VCS_MARK_WIDTH_PX * 2, DELETED_MARK_HEIGHT_PX),
+        )
+        return
+    }
+
+    drawRect(
+        color = color,
+        topLeft = Offset(0f, top),
+        size = Size(VCS_MARK_WIDTH_PX, metrics.height),
+    )
 }
 
 private fun DrawScope.drawSelection(

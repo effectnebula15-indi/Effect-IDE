@@ -20,6 +20,7 @@ import io.github.effectnebula.eide.core.syntax.LineHighlighter
 import io.github.effectnebula.eide.core.syntax.TokenKind
 import io.github.effectnebula.eide.ui.editor.CodeEditor
 import io.github.effectnebula.eide.ui.editor.EditorColors
+import io.github.effectnebula.eide.ui.editor.GutterMark
 import io.github.effectnebula.eide.ui.editor.observeEditor
 import io.github.effectnebula.eide.ui.theme.Eide
 
@@ -47,6 +48,7 @@ fun EditorScreen(
      * человек настроил его один раз, а не для каждой вкладки.
      */
     onFontSizeChange: ((Float) -> Unit)? = null,
+    gutterMarks: Map<Int, GutterMark> = emptyMap(),
 ) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
@@ -57,6 +59,7 @@ fun EditorScreen(
             highlighter = highlighter,
             fontSizeSp = fontSizeSp,
             onFontSizeChange = onFontSizeChange,
+            gutterMarks = gutterMarks,
         )
 
         StatusBar(state)
@@ -105,6 +108,11 @@ fun editorColors(): EditorColors = EditorColors(
     // Бледнее выделения: подсветка совпадений лежит под ним, и выделенное
     // совпадение должно оставаться отличимым от остальных.
     searchMatch = Eide.colors.selection.copy(alpha = 0.35f),
+    vcs = mapOf(
+        GutterMark.Added to Eide.colors.vcsAdded,
+        GutterMark.Modified to Eide.colors.vcsModified,
+        GutterMark.DeletedBelow to Eide.colors.vcsDeleted,
+    ),
     syntax = mapOf(
         TokenKind.Keyword to Eide.colors.syntaxKeyword,
         TokenKind.String to Eide.colors.syntaxString,

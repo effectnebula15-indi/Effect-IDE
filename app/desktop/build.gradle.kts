@@ -8,6 +8,7 @@ dependencies {
     implementation(project(":platform:api"))
     implementation(project(":platform:desktop"))
     implementation(project(":runner"))
+    implementation(project(":vcs"))
 
     implementation(compose.desktop.currentOs)
 
