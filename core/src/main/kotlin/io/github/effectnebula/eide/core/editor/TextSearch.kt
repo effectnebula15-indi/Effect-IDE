@@ -33,9 +33,25 @@ class TextSearch(private val query: SearchQuery) {
     val error: String? = if (query.isEmpty || regex != null) null else "неверное регулярное выражение"
 
     /** Ленивая последовательность совпадений от начала документа. */
-    fun findAll(text: Rope): Sequence<SearchMatch> {
+    fun findAll(text: Rope): Sequence<SearchMatch> = findFrom(text, 0)
+
+    /**
+     * Ленивая последовательность совпадений, начиная с позиции [from].
+     *
+     * Существует ради подсветки видимых строк: с ленивым `findAll` и
+     * отбрасыванием начала регулярное выражение всё равно прогоняется по всему
+     * тексту до нужного места, и на файле в три мегабайта это сорок миллисекунд
+     * на кадр — измерено, не предположено.
+     *
+     * Взгляд назад за [from] выражению доступен: `Matcher.find(int)` сбрасывает
+     * область на весь текст, поэтому `(?<!...)` в границах слова видит знак
+     * перед началом скана и не находит слово внутри другого слова.
+     */
+    fun findFrom(text: Rope, from: Int): Sequence<SearchMatch> {
         val compiled = regex ?: return emptySequence()
-        return compiled.findAll(text.asCharSequence()).map { it.toMatch() }
+        return compiled
+            .findAll(text.asCharSequence(), from.coerceIn(0, text.length))
+            .map { it.toMatch() }
     }
 
     /**

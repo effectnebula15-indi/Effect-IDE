@@ -15,6 +15,9 @@ import io.github.effectnebula.eide.core.text.Replacement
  * сотни тысяч объектов на каждое нажатие клавиши в строке поиска. Для подсветки
  * берётся только видимый кусок ([matchesIn]), для подписи — счёт с потолком.
  */
+/** Сколько совпадений нашлось и не упёрся ли счёт в потолок. */
+data class MatchCount(val value: Int, val exact: Boolean)
+
 class SearchSession(private val state: EditorState) {
 
     var query: SearchQuery = SearchQuery("")
@@ -39,22 +42,38 @@ class SearchSession(private val state: EditorState) {
      * Сколько совпадений в документе, но не больше [COUNT_LIMIT].
      *
      * Точный счёт на большом файле — полный проход, и делать его на каждое
-     * нажатие в строке поиска нельзя. Достигнутый потолок видно по
-     * [countIsExact]: интерфейс покажет «500+», а не соврёт числом.
+     * нажатие в строке поиска нельзя. Достигнутый потолок виден в [MatchCount]:
+     * интерфейс покажет «больше 500», а не соврёт числом.
+     *
+     * Возвращается пара, а не число с отдельным вопросом «а точное ли оно»:
+     * два вызова — два прохода по документу ради одного и того же ответа.
      */
-    fun count(): Int = search.findAll(state.text).take(COUNT_LIMIT).count()
-
-    fun countIsExact(): Boolean = count() < COUNT_LIMIT
+    fun count(): MatchCount {
+        val found = search.findAll(state.text).take(COUNT_LIMIT).count()
+        return MatchCount(found, exact = found < COUNT_LIMIT)
+    }
 
     /**
      * Совпадения в диапазоне `[from, to)` — для подсветки видимых строк.
      *
      * Совпадение, начавшееся до [from] и заходящее внутрь, тоже попадает:
-     * иначе многострочное совпадение исчезало бы при прокрутке.
+     * иначе многострочное совпадение исчезало бы при прокрутке. Его `start`
+     * при этом может быть усечён — см. ниже.
      */
     fun matchesIn(from: Int, to: Int): List<SearchMatch> {
         if (query.isEmpty || from >= to) return emptyList()
-        return search.findAll(state.text)
+
+        // Скан начинается не с нуля: иначе прокрутка в конец большого файла с
+        // открытым поиском стоит полного прохода регулярным выражением на каждый
+        // кадр — на трёх мегабайтах это сорок миллисекунд, измерено. Отступ назад
+        // нужен для совпадения, начавшегося выше видимой области.
+        //
+        // Цена: у совпадения длиннее отступа сообщённое начало усечено до начала
+        // скана. Для подсветки это незаметно — отрисовка всё равно обрезает
+        // диапазон по видимым строкам, — но всякий, кто возьмёт start отсюда как
+        // настоящее начало совпадения, ошибётся.
+        val scanFrom = (from - LOOKBEHIND).coerceAtLeast(0)
+        return search.findFrom(state.text, scanFrom)
             .dropWhile { it.end <= from }
             .takeWhile { it.start < to }
             .take(VISIBLE_LIMIT)
@@ -130,5 +149,15 @@ class SearchSession(private val state: EditorState) {
 
         /** Подсвечивать больше, чем помещается на экране, незачем. */
         const val VISIBLE_LIMIT = 500
+
+        /**
+         * Насколько отступать назад от видимой области при поиске совпадений
+         * для подсветки.
+         *
+         * Четыре тысячи знаков — примерно экран очень мелкого шрифта; совпадение
+         * длиннее этого не подсветится с начала. Больше отступ — дороже кадр,
+         * меньше — заметнее потеря.
+         */
+        const val LOOKBEHIND = 4096
     }
 }

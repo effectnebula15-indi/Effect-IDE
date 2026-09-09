@@ -36,6 +36,69 @@ class SearchSessionTest {
 
     private fun EditorState.dump() = text.substring(0, text.length)
 
+    // --- подсветка видимой части -----------------------------------------------
+
+    @Test
+    fun `a match starting above the visible area is still highlighted`() {
+        // Иначе длинное совпадение исчезало бы, стоило прокрутить на строку.
+        val state = editor("начало " + "x".repeat(50) + " конец")
+        val session = SearchSession(state)
+        session.setQuery(SearchQuery("x+", isRegex = true))
+
+        val matches = session.matchesIn(from = 30, to = 40)
+
+        assertEquals(1, matches.size, "совпадение, начавшееся выше экрана, потерялось")
+        assertEquals(7, matches[0].start)
+    }
+
+    @Test
+    fun `matches entirely above the visible area are left out`() {
+        val state = editor("совпадение" + " ".repeat(100) + "совпадение")
+        val session = SearchSession(state)
+        session.setQuery(SearchQuery("совпадение"))
+
+        val matches = session.matchesIn(from = 100, to = 130)
+
+        assertEquals(1, matches.size)
+        assertEquals(110, matches[0].start)
+    }
+
+    @Test
+    fun `word boundaries hold when the scan starts mid document`() {
+        // Скан для подсветки начинается не с нуля, а с отступом назад от видимой
+        // области. Если бы выражение при этом теряло из виду знак перед началом
+        // скана, «слово целиком» находило бы слово внутри другого слова —
+        // и именно в середине большого файла, где это труднее всего заметить.
+        val filler = "\n".repeat(10_000)
+        val state = editor(filler + "x" + "a".repeat(5_000))
+        val session = SearchSession(state)
+        session.setQuery(SearchQuery("a+", isRegex = true, wholeWord = true))
+
+        val from = filler.length + 1 + 4_500
+        val matches = session.matchesIn(from, from + 100)
+
+        assertTrue(matches.isEmpty(), "нашлось слово внутри слова: ${matches.firstOrNull()}")
+    }
+
+    @Test
+    fun `a very long match keeps its highlight but not its true start`() {
+        // Названная цена ограниченного отступа назад. Она мельче, чем кажется:
+        // подсветка на месте, усечено только сообщённое начало совпадения —
+        // а отрисовка всё равно обрезает его по видимым строкам.
+        val state = editor("x".repeat(20_000))
+        val session = SearchSession(state)
+        session.setQuery(SearchQuery("x+", isRegex = true))
+
+        val matches = session.matchesIn(from = 19_000, to = 19_100)
+
+        assertEquals(1, matches.size, "подсветка длинного совпадения потерялась")
+        assertTrue(
+            matches[0].start > 0,
+            "начало не усечено — значит скан всё-таки пошёл от начала документа",
+        )
+        assertTrue(matches[0].end >= 19_100, "подсветка не дотянулась до видимой области")
+    }
+
     // --- перемещение по совпадениям --------------------------------------------
 
     @Test
@@ -180,7 +243,7 @@ class SearchSessionTest {
         val session = SearchSession(state)
         session.setQuery(SearchQuery("шаг", wholeWord = true))
 
-        assertEquals(1, session.count(), "«слово целиком» посчитало часть слова")
+        assertEquals(1, session.count().value, "«слово целиком» посчитало часть слова")
     }
 
     @Test
@@ -233,7 +296,7 @@ class SearchSessionTest {
         val session = SearchSession(state)
 
         assertEquals(emptyList(), session.matchesIn(0, 5))
-        assertEquals(0, session.count())
+        assertEquals(0, session.count().value)
     }
 
     @Test
@@ -242,15 +305,15 @@ class SearchSessionTest {
         // строке поиска это неприемлемо.
         val (_, session) = session("а".repeat(2_000), "а")
 
-        assertEquals(500, session.count())
-        assertFalse(session.countIsExact(), "потолок счёта выдан за точное число")
+        assertEquals(500, session.count().value)
+        assertFalse(session.count().exact, "потолок счёта выдан за точное число")
     }
 
     @Test
     fun `a small number of matches is counted exactly`() {
         val (_, session) = session("а б а", "а")
 
-        assertEquals(2, session.count())
-        assertTrue(session.countIsExact())
+        assertEquals(2, session.count().value)
+        assertTrue(session.count().exact)
     }
 }

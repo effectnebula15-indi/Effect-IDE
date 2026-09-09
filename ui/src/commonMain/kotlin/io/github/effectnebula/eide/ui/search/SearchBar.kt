@@ -135,10 +135,10 @@ private fun Status(session: SearchSession, pattern: String) {
         else -> {
             val count = session.count()
             when {
-                count == 0 -> "нет совпадений"
-                session.countIsExact() -> "совпадений: $count"
+                count.value == 0 -> "нет совпадений"
+                count.exact -> "совпадений: ${count.value}"
                 // Потолок счёта: врать точным числом нельзя.
-                else -> "совпадений: больше $count"
+                else -> "совпадений: больше ${count.value}"
             }
         }
     }
