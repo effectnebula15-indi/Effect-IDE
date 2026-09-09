@@ -33,7 +33,9 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import io.github.effectnebula.eide.core.exec.KillReason
 import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
@@ -49,6 +51,7 @@ import io.github.effectnebula.eide.runner.LocalPythonBackend
 import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
 import io.github.effectnebula.eide.ui.DEFAULT_FONT_SIZE_SP
 import io.github.effectnebula.eide.ui.EditorScreen
+import io.github.effectnebula.eide.ui.editor.AutoSave
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkEditor
 import io.github.effectnebula.eide.ui.project.FileTabs
@@ -427,6 +430,14 @@ private fun RunPanel(
         }
 
         if (active != null) {
+            // То же автосохранение, что на телефоне. Десктоп не убивают внезапно,
+            // но правило «сначала десктоп» тут было нарушено: поведение писалось
+            // и проверялось на Android, а увидеть его можно только здесь.
+            AutoSave(active.state) {
+                withContext(Dispatchers.IO) { workspace.save(active) }
+                onChanged()
+            }
+
             EditorScreen(
                 active.state,
                 Modifier.weight(1f),

@@ -22,6 +22,9 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.junit.jupiter)
             runtimeOnly(libs.junit.platform.launcher)
+            // Виртуальное время: пауза автосохранения проверяется точно,
+            // а не ожиданием по настоящим часам.
+            implementation(libs.kotlinx.coroutines.test)
 
             // Проверка самого интерфейса: жесты, попадание, отрисовка. Единственный
             // способ увидеть поведение UI, не имея телефона и не нажимая руками.
