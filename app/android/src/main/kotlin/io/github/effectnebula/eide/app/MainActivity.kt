@@ -52,6 +52,7 @@ import io.github.effectnebula.eide.core.project.Workspace
 import io.github.effectnebula.eide.platform.android.IcuGraphemeBreaker
 import io.github.effectnebula.eide.runner.android.AndroidPythonBackend
 import io.github.effectnebula.eide.runner.android.CanvasArea
+import io.github.effectnebula.eide.ui.DEFAULT_FONT_SIZE_SP
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkEditor
@@ -115,6 +116,11 @@ private fun App() {
 private fun Shell() {
     var screen by remember { mutableStateOf(Screen.Code) }
 
+    // Размер шрифта живёт здесь, а не в редакторе: он переживает и смену файла,
+    // и уход в дерево или на стенд замеров. Между запусками приложения — нет:
+    // хранилища настроек пока нет, и заводить его ради одного числа рано.
+    var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE_SP) }
+
     // Область кадров переживает несколько запусков: раннер одноразовый, а
     // канва — нет. Создаётся один раз на всё приложение.
     val canvas = remember { runCatching { CanvasArea.create() }.getOrNull() }
@@ -171,6 +177,8 @@ private fun Shell() {
                     canvas = canvas,
                     onShowCanvas = { showCanvas = true },
                     onRunStarted = { awaitingFirstFrame = true },
+                    fontSizeSp = fontSize,
+                    onFontSizeChange = { fontSize = it },
                 )
                 Screen.Render -> {
                     // Документ строится один раз: пересборка на кадре испортила бы замер.
@@ -199,6 +207,8 @@ private fun WorkbenchScreen(
     canvas: CanvasArea?,
     onShowCanvas: () -> Unit,
     onRunStarted: () -> Unit,
+    fontSizeSp: Float,
+    onFontSizeChange: (Float) -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -383,6 +393,8 @@ private fun WorkbenchScreen(
                     active.state,
                     search = search,
                     highlighter = Highlighters.forFile(active.name),
+                    fontSizeSp = fontSizeSp,
+                    onFontSizeChange = onFontSizeChange,
                 )
             } else {
                 Label("откройте файл во вкладке «проект»", TextDim, 13)

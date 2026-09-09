@@ -87,6 +87,11 @@ fun CodeEditor(
     search: SearchSession? = null,
     highlighter: LineHighlighter = LineHighlighter.None,
     /**
+     * Куда сообщать новый размер шрифта, выбранный двумя пальцами. `null` —
+     * жест не подключается: размер задаёт тот, кто рисует редактор.
+     */
+    onFontSizeChange: ((Float) -> Unit)? = null,
+    /**
      * Крючок для замеров (P2). В обычной работе null, и ничего связанного с ним
      * не исполняется. Существует ради того, чтобы стенд мерил этот рендер,
      * а не свой собственный — см. [RenderProbe].
@@ -100,7 +105,10 @@ fun CodeEditor(
     val style = remember(fontSizeSp, font, colors.text) {
         TextStyle(fontSize = fontSizeSp.sp, fontFamily = font, color = colors.text)
     }
-    val cache = remember { LineLayoutCache<TextLayoutResult>() }
+    // Кэш живёт вместе со стилем, а не вечно: ключ в нём — текст строки, и
+    // разметка, снятая при другом размере шрифта, по тому же ключу нашлась бы
+    // снова. Смена размера редка, потерять кэш на ней не жалко.
+    val cache = remember(style) { LineLayoutCache<TextLayoutResult>() }
     val lineStates = remember(highlighter) { LineStates(highlighter) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -198,6 +206,14 @@ fun CodeEditor(
         }
     }
 
+    val zoom = if (onFontSizeChange == null) {
+        Modifier
+    } else {
+        Modifier.fontZoom { factor ->
+            onFontSizeChange((fontSizeSp * factor).coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP))
+        }
+    }
+
     // Ввод при замерах не подключается совсем. Причина не в стоимости узлов,
     // а в том, что сессия ввода поднимает на телефоне клавиатуру: она закрывает
     // половину экрана, видимых строк остаётся вдвое меньше, и кадр обходится
@@ -260,6 +276,7 @@ fun CodeEditor(
                 .fillMaxSize()
                 .scrollable(scrollState, Orientation.Vertical)
                 .scrollable(horizontalScrollState, Orientation.Horizontal)
+                .then(zoom)
                 .then(input)
         ) {
             viewportHeight = size.height.roundToInt()

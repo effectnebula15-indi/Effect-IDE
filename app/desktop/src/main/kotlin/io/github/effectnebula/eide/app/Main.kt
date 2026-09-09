@@ -47,6 +47,7 @@ import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
 import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
 import io.github.effectnebula.eide.runner.LocalPythonBackend
 import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
+import io.github.effectnebula.eide.ui.DEFAULT_FONT_SIZE_SP
 import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.ui.benchmarkEditor
@@ -157,6 +158,7 @@ private fun DesktopShell() {
     val startup = remember { startWorkspace() }
     val workspace = startup.workspace
     var notice by remember { mutableStateOf(startup.failure) }
+    var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE_SP) }
     var revision by remember { mutableStateOf(0) }
     @Suppress("UNUSED_EXPRESSION")
     revision
@@ -245,6 +247,8 @@ private fun DesktopShell() {
                     workspace = workspace,
                     active = active,
                     canvas = canvas,
+                    fontSizeSp = fontSize,
+                    onFontSizeChange = { fontSize = it },
                     onRunStarted = { awaitingFirstFrame = true },
                     onChanged = { revision++ },
                 )
@@ -305,6 +309,8 @@ private fun RunPanel(
     workspace: Workspace,
     active: io.github.effectnebula.eide.core.project.OpenFile?,
     canvas: DesktopCanvasArea?,
+    fontSizeSp: Float,
+    onFontSizeChange: (Float) -> Unit,
     onRunStarted: () -> Unit,
     onChanged: () -> Unit,
 ) {
@@ -426,6 +432,8 @@ private fun RunPanel(
                 Modifier.weight(1f),
                 search = search,
                 highlighter = Highlighters.forFile(active.name),
+                fontSizeSp = fontSizeSp,
+                onFontSizeChange = onFontSizeChange,
             )
         } else {
             Box(Modifier.weight(1f).padding(16.dp)) {

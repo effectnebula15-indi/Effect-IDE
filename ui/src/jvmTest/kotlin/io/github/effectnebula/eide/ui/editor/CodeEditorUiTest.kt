@@ -4,12 +4,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.MouseInjectionScope
 import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.TouchInjectionScope
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
@@ -147,6 +153,128 @@ class CodeEditorUiTest {
     }
 
     @Test
+    fun `a bigger font moves the same point to an earlier column`() = runComposeUiTest {
+        // Кэш разметки живёт по тексту строки. Если он переживёт смену размера
+        // шрифта, редактор будет считать по старой разметке: попадание тапа
+        // разъедется, а на стенде замеров цифры для другого размера окажутся
+        // цифрами прежнего.
+        val state = editor(longLine)
+        var size by mutableStateOf(13f)
+
+        setContent {
+            CodeEditor(state, colors, Modifier.size(400.dp, 200.dp), fontSizeSp = size)
+        }
+
+        onRoot().performMouseInput { clickAt(Offset(300f, 5f)) }
+        waitForIdle()
+        val small = state.carets.primary.head
+
+        size = 26f
+        waitForIdle()
+
+        onRoot().performMouseInput { clickAt(Offset(300f, 5f)) }
+        waitForIdle()
+        val large = state.carets.primary.head
+
+        // Не «меньше», а «примерно вдвое меньше»: со старой разметкой колонка тоже
+        // немного уменьшается — гаттер стал шире, и точка тычка сдвинулась вглубь
+        // строки. На настоящих числах это 35 → 32 против 35 → 16, так что порог
+        // отделяет одно от другого с запасом.
+        assertTrue(
+            large <= small * 0.7f,
+            "шрифт вдвое крупнее, а колонка почти та же — разметка осталась от прежнего размера: $small → $large",
+        )
+    }
+
+    @Test
+    fun `spreading two fingers makes the font bigger`() = runComposeUiTest {
+        val state = editor(longLine)
+        var size by mutableStateOf(13f)
+
+        setContent {
+            CodeEditor(
+                state, colors, Modifier.size(400.dp, 200.dp),
+                fontSizeSp = size,
+                onFontSizeChange = { size = it },
+            )
+        }
+
+        onRoot().performTouchInput {
+            down(0, Offset(150f, 100f))
+            down(1, Offset(250f, 100f))
+            moveTo(0, Offset(100f, 100f))
+            moveTo(1, Offset(300f, 100f))
+            up(0)
+            up(1)
+        }
+        waitForIdle()
+
+        assertTrue(size > 13f, "пальцы развели, а шрифт не вырос: $size")
+    }
+
+    @Test
+    fun `pinching two fingers makes the font smaller`() = runComposeUiTest {
+        val state = editor(longLine)
+        var size by mutableStateOf(13f)
+
+        setContent {
+            CodeEditor(
+                state, colors, Modifier.size(400.dp, 200.dp),
+                fontSizeSp = size,
+                onFontSizeChange = { size = it },
+            )
+        }
+
+        onRoot().performTouchInput {
+            down(0, Offset(100f, 100f))
+            down(1, Offset(300f, 100f))
+            moveTo(0, Offset(180f, 100f))
+            moveTo(1, Offset(220f, 100f))
+            up(0)
+            up(1)
+        }
+        waitForIdle()
+
+        assertTrue(size < 13f, "пальцы свели, а шрифт не уменьшился: $size")
+    }
+
+    @Test
+    fun `one finger scrolls instead of zooming`() = runComposeUiTest {
+        // Ровно та ловушка, ради которой жест написан вручную: готовый
+        // detectTransformGestures срабатывает и на одном пальце и забирает себе
+        // обычную прокрутку.
+        val state = editor((0 until 200).joinToString("\n") { "line $it" })
+        var size by mutableStateOf(13f)
+
+        setContent {
+            CodeEditor(
+                state, colors, Modifier.size(400.dp, 200.dp),
+                fontSizeSp = size,
+                onFontSizeChange = { size = it },
+            )
+        }
+
+        // Только касания: мышь и палец в одном тесте ссорятся внутри самого
+        // тестового ввода («Cursor is entered, but not associated with a specific
+        // input type»), а проверяется здесь как раз палец.
+        onRoot().performTouchInput { tapAt(Offset(300f, 5f)) }
+        waitForIdle()
+        val before = state.text.lineOf(state.carets.primary.head)
+
+        onRoot().performTouchInput { swipeUp() }
+        waitForIdle()
+
+        onRoot().performTouchInput { tapAt(Offset(300f, 5f)) }
+        waitForIdle()
+
+        assertEquals(13f, size, "один палец изменил размер шрифта")
+        assertTrue(
+            state.text.lineOf(state.carets.primary.head) > before,
+            "один палец не прокрутил текст",
+        )
+    }
+
+    @Test
     fun `sideways scrolling stops at the end of the longest line`() = runComposeUiTest {
         // Без ограничения текст уезжает в пустоту и найти его обратно нечем.
         // Проверяется наблюдаемое следствие: докрутив до упора, у левого края
@@ -214,3 +342,10 @@ private fun MouseInjectionScope.clickAt(position: Offset) {
 
 /** Разметка строки и ширина гаттера — всё, что нужно, чтобы прицелиться. */
 private class TapProbe(val layout: TextLayoutResult, val gutter: Float)
+
+/** Касание в заданной точке: готового `click` у сценария касаний тоже нет. */
+@OptIn(ExperimentalTestApi::class)
+private fun TouchInjectionScope.tapAt(position: Offset) {
+    down(position)
+    up(0)
+}

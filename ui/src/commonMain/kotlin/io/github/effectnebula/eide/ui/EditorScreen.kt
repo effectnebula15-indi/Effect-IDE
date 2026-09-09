@@ -23,6 +23,9 @@ import io.github.effectnebula.eide.ui.editor.EditorColors
 import io.github.effectnebula.eide.ui.editor.observeEditor
 import io.github.effectnebula.eide.ui.theme.Eide
 
+/** Размер шрифта по умолчанию. Тот же, что в IntelliJ на десктопе. */
+const val DEFAULT_FONT_SIZE_SP = 13f
+
 /**
  * Экран редактирования: сам редактор и строка состояния.
  *
@@ -36,6 +39,14 @@ fun EditorScreen(
     modifier: Modifier = Modifier,
     search: SearchSession? = null,
     highlighter: LineHighlighter = LineHighlighter.None,
+    fontSizeSp: Float = DEFAULT_FONT_SIZE_SP,
+    /**
+     * Куда сообщать размер, выбранный двумя пальцами. `null` — жест выключен.
+     *
+     * Размер живёт снаружи потому, что переживает и смену файла, и уход в дерево:
+     * человек настроил его один раз, а не для каждой вкладки.
+     */
+    onFontSizeChange: ((Float) -> Unit)? = null,
 ) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
@@ -44,6 +55,8 @@ fun EditorScreen(
             modifier = Modifier.fillMaxWidth().weight(1f),
             search = search,
             highlighter = highlighter,
+            fontSizeSp = fontSizeSp,
+            onFontSizeChange = onFontSizeChange,
         )
 
         StatusBar(state)
