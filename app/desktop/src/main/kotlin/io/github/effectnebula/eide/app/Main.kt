@@ -576,8 +576,26 @@ private object Debug {
      * три системы (риск R6 в плане). До неё графика на десктопе работает при
      * запуске из исходников.
      */
-    val canvasLibrary: String? get() = System.getProperty("eide.canvasLib")
-    val shimDirectory: String? get() = System.getProperty("eide.shimDir")
+    val canvasLibrary: String? get() = System.getProperty("eide.canvasLib") ?: bundled(LIBRARY_NAMES)
+    val shimDirectory: String? get() = System.getProperty("eide.shimDir") ?: bundled(listOf("python"))
+
+    /**
+     * Где лежат ресурсы в собранном дистрибутиве.
+     *
+     * `compose.application.resources.dir` выставляет сам рантайм Compose при
+     * запуске упакованного приложения. При запуске из исходников свойства нет,
+     * и путь приходит из Gradle — поэтому сперва спрашиваются ключи `-D`.
+     */
+    private fun bundled(names: List<String>): String? {
+        val root = System.getProperty("compose.application.resources.dir") ?: return null
+        return names.asSequence()
+            .map { File(root, it) }
+            .firstOrNull { it.exists() }
+            ?.absolutePath
+    }
+
+    /** Имя библиотеки зависит от системы, а перебрать три варианта дешевле, чем угадывать. */
+    private val LIBRARY_NAMES = listOf("libeide_canvas.so", "libeide_canvas.dylib", "eide_canvas.dll")
 }
 
 /**

@@ -41,9 +41,38 @@ tasks.withType<Test>().configureEach {
     systemProperty("eide.shimDir", shim.absolutePath)
 }
 
+/*
+ * Нативная библиотека и шим на Python едут вместе с приложением.
+ *
+ * Пока их путь приходил только из свойств Gradle, собранный дистрибутив
+ * запускал графику молча вникуда: библиотеки рядом нет, переменная окружения
+ * пустая, программа пользователя падает на импорте. Проверить это можно было
+ * только собрав дистрибутив, а собирать его в разработке незачем — классическое
+ * «у меня работает» (риск R6).
+ */
+val canvasResourcesDir: Provider<Directory> = layout.buildDirectory.dir("canvas-resources")
+
+val stageCanvasResources = tasks.register<Copy>("stageCanvasResources") {
+    dependsOn(rootProject.tasks.named("canvasLibrary"))
+
+    into(canvasResourcesDir)
+    into("common") {
+        from(rootProject.layout.buildDirectory.dir("native-canvas/lib")) {
+            include("libeide_canvas.*", "eide_canvas.dll")
+        }
+        from(rootProject.layout.projectDirectory.dir("native/canvas/python")) {
+            into("python")
+        }
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "io.github.effectnebula.eide.app.MainKt"
+
+        nativeDistributions {
+            appResourcesRootDir.set(canvasResourcesDir)
+        }
     }
 }
 
@@ -94,3 +123,8 @@ tasks.withType<JavaExec>().configureEach {
     systemProperty("file.encoding", "UTF-8")
     systemProperty("stdout.encoding", "UTF-8")
 }
+
+// Упаковка обязана дождаться копирования: appResourcesRootDir — это просто путь,
+// зависимости от задачи в нём Gradle не видит и справедливо ругается.
+tasks.matching { it.name == "prepareAppResources" }
+    .configureEach { dependsOn(stageCanvasResources) }
