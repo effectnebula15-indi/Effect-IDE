@@ -41,7 +41,6 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
-import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.FoldState
 import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
@@ -235,11 +234,12 @@ private fun DesktopShell() {
                 tree = workspace.tree,
                 initialPattern = Debug.projectSearch.orEmpty(),
                 onOpen = { match ->
-                    notice = runCatching {
-                        val open = workspace.open(match.file)
-                        val offset = open.state.text.lineStart(match.line) + match.column
-                        open.state.setCarets(CaretSet.single(offset))
-                    }.fold({ null }, { "не открылся ${match.file.name}: ${it.message}" })
+                    workspace.saveModified()
+                    // Арифметика позиции — в `Workspace.openAt`: она же нужна на
+                    // Android, а разъехавшиеся копии одного расчёта этот проект
+                    // уже проходил на попадании пальцем в знак.
+                    notice = runCatching { workspace.openAt(match.file, match.line, match.column) }
+                        .fold({ null }, { "не открылся ${match.file.name}: ${it.message}" })
                     showProjectSearch = false
                     revision++
                 },

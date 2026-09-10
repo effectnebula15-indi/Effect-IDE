@@ -63,6 +63,7 @@ import io.github.effectnebula.eide.ui.editorColors
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
+import io.github.effectnebula.eide.ui.search.ProjectSearchPanel
 import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import io.github.effectnebula.eide.ui.widgets.NoticeBar
@@ -103,7 +104,7 @@ private val PROTOTYPE_LIMITS = RunLimits(
     maxResidentBytes = 256L * 1024 * 1024,
 )
 
-private enum class Screen { Project, Code, Render }
+private enum class Screen { Project, Search, Code, Render }
 
 @Composable
 private fun App() {
@@ -166,14 +167,15 @@ private fun Shell() {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Tab("проект", screen == Screen.Project) { screen = Screen.Project }
+            Tab("поиск", screen == Screen.Search) { screen = Screen.Search }
             Tab("код", screen == Screen.Code) { screen = Screen.Code }
             Tab("отрисовка · P2", screen == Screen.Render) { screen = Screen.Render }
         }
 
         Box(Modifier.fillMaxSize()) {
             when (screen) {
-                Screen.Project, Screen.Code -> WorkbenchScreen(
-                    showTree = screen == Screen.Project,
+                Screen.Project, Screen.Search, Screen.Code -> WorkbenchScreen(
+                    panel = screen,
                     onFileOpened = { screen = Screen.Code },
                     canvas = canvas,
                     onShowCanvas = { showCanvas = true },
@@ -203,7 +205,7 @@ private fun Shell() {
  */
 @Composable
 private fun WorkbenchScreen(
-    showTree: Boolean,
+    panel: Screen,
     onFileOpened: () -> Unit,
     canvas: CanvasArea?,
     onShowCanvas: () -> Unit,
@@ -324,7 +326,22 @@ private fun WorkbenchScreen(
         )
     }
 
-    if (showTree) {
+    if (panel == Screen.Search) {
+        ProjectSearchPanel(
+            tree = workspace.tree,
+            onOpen = { match ->
+                saveNow()
+                // Расчёт позиции — в `Workspace.openAt`, тот же, что на десктопе.
+                notice = runCatching { workspace.openAt(match.file, match.line, match.column) }
+                    .fold({ null }, { "не открылся ${match.file.name}: ${it.message}" })
+                workspaceRevision++
+                onFileOpened()
+            },
+        )
+        return
+    }
+
+    if (panel == Screen.Project) {
         FileTreePanel(
             tree = workspace.tree,
             selected = active?.file,

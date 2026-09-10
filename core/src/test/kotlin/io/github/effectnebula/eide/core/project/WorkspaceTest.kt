@@ -278,4 +278,75 @@ class WorkspaceTest {
 
         assertFalse(workspace.activate(File(root, "b.py")))
     }
+
+    // --- открытие в найденном месте --------------------------------------------
+
+    @Test
+    fun `openAt puts the caret at the given line and column`() {
+        val root = sandbox()
+        val file = root.write("main.py", "первая\nвторая\nтретья\n")
+        val workspace = workspace(root)
+
+        val opened = workspace.openAt(file, line = 1, column = 3)
+
+        assertEquals(10, opened.state.carets.primary.head, "«вторая» начинается с офсета 7")
+    }
+
+    @Test
+    fun `openAt clamps a column past the end of its line`() {
+        val root = sandbox()
+        val file = root.write("main.py", "коротко\nдлинная строка\n")
+        val workspace = workspace(root)
+
+        // Столбец за концом строки: курсор обязан встать в конец своей строки,
+        // а не уехать на следующую и не в конец файла.
+        val opened = workspace.openAt(file, line = 0, column = 100)
+
+        assertEquals(7, opened.state.carets.primary.head)
+    }
+
+    @Test
+    fun `openAt survives a line that the buffer no longer has`() {
+        val root = sandbox()
+        val file = root.write("main.py", "одна\nдве\nтри\n")
+        val workspace = workspace(root)
+
+        // Так и бывает: поиск прошёл по диску, а буфер уже открыт и подрезан.
+        // Показать файл всё равно надо — бросок здесь означал бы, что человек
+        // ткнул в результат и не получил ничего.
+        val opened = workspace.openAt(file, line = 999, column = 0)
+
+        assertEquals(file, opened.file)
+        assertEquals(13, opened.state.carets.primary.head, "последняя строка пустая, она же конец файла")
+    }
+
+    @Test
+    fun `openAt clamps a negative column to the start of its line`() {
+        val root = sandbox()
+        val file = root.write("main.py", "первая\nвторая\n")
+        val workspace = workspace(root)
+
+        // Поиск отрицательных столбцов не даёт, но `openAt` зовут не только
+        // из него: разбор трассировки или ответ LSP легко ошибётся на единицу,
+        // и курсор молча уехал бы на строку выше.
+        val opened = workspace.openAt(file, line = 1, column = -5)
+
+        assertEquals(7, opened.state.carets.primary.head)
+    }
+
+    @Test
+    fun `openAt does not reread a file that is already open`() {
+        val root = sandbox()
+        val file = root.write("main.py", "первая\nвторая\n")
+        val workspace = workspace(root)
+
+        val first = workspace.open(file)
+        file.writeText("другое содержимое\n")
+
+        val again = workspace.openAt(file, line = 0, column = 2)
+
+        assertSame(first, again, "открытый буфер важнее свежести диска")
+        assertEquals(2, again.state.carets.primary.head)
+    }
+
 }

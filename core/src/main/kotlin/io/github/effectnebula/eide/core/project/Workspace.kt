@@ -1,5 +1,6 @@
 package io.github.effectnebula.eide.core.project
 
+import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.text.Document
 import io.github.effectnebula.eide.platform.GraphemeBreaker
@@ -76,6 +77,30 @@ class Workspace(
         )
         this.opened[key] = opened
         active = opened
+        return opened
+    }
+
+    /**
+     * Открывает файл и ставит курсор в найденное место.
+     *
+     * Нужно поиску по проекту: он читает файлы с диска, а открытый буфер диску
+     * не равен — `open` намеренно не перечитывает уже открытый файл, чтобы не
+     * потерять несохранённые правки. Значит найденной строки в буфере может
+     * не оказаться вовсе.
+     *
+     * Промах здесь не ошибка: показать файл всё равно надо, поэтому позиция
+     * подрезается по тексту, а не проверяется броском. Курсор при этом не
+     * уезжает на следующую строку — столбец подрезается по концу своей.
+     */
+    fun openAt(file: File, line: Int, column: Int): OpenFile {
+        val opened = open(file)
+        val text = opened.state.text
+
+        val safeLine = line.coerceIn(0, text.lineCount - 1)
+        val offset = (text.lineStart(safeLine) + column.coerceAtLeast(0))
+            .coerceAtMost(text.lineEnd(safeLine))
+
+        opened.state.setCarets(CaretSet.single(offset))
         return opened
     }
 
