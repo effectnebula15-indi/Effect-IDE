@@ -1,76 +1,72 @@
 package io.github.effectnebula.eide.ui.canvas
 
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 /**
- * Вписывание канвы в экран — арифметика, в которой живут ошибки на единицу
- * и перепутанные оси. На экране это выглядит как «квадрат почему-то
- * прямоугольный», и объяснение ищут в коде программы, а не здесь.
+ * Вписывание кадра и обратный пересчёт точки.
+ *
+ * Прямой и обратный ход обязаны сходиться: если они разойдутся, палец в
+ * программе будет попадать не туда, куда его поставил человек, и искать
+ * причину он будет в своём коде.
  */
 class FitTest {
 
     @Test
-    fun `content fills the viewport when proportions match`() {
-        val fit = fitInside(480, 800, 960f, 1600f)
+    fun `content keeps its proportions inside a wide viewport`() {
+        val fit = fitInside(480, 800, viewportWidth = 1000f, viewportHeight = 800f)
 
-        assertEquals(IntSize(960, 1600), fit.size)
-        assertEquals(IntOffset(0, 0), fit.offset)
+        assertEquals(480, fit.size.width)
+        assertEquals(800, fit.size.height)
+        // По центру: чёрные поля слева и справа одинаковые.
+        assertEquals(260, fit.offset.x)
+        assertEquals(0, fit.offset.y)
     }
 
     @Test
-    fun `wide viewport leaves fields on the sides`() {
-        val fit = fitInside(480, 800, 2000f, 1600f)
+    fun `a point in the black bars belongs to no one`() {
+        val fit = fitInside(480, 800, 1000f, 800f)
 
-        assertEquals(IntSize(960, 1600), fit.size, "масштаб выбран не по узкой стороне")
-        assertEquals(IntOffset(520, 0), fit.offset, "содержимое не по центру")
+        assertNull(pointInContent(fit, 480, 800, x = 10f, y = 400f), "поле слева отдали программе")
+        assertNull(pointInContent(fit, 480, 800, x = 990f, y = 400f), "поле справа отдали программе")
     }
 
     @Test
-    fun `tall viewport leaves fields above and below`() {
-        val fit = fitInside(480, 800, 960f, 2000f)
+    fun `corners map to corners`() {
+        val fit = fitInside(480, 800, 1000f, 800f)
 
-        assertEquals(IntSize(960, 1600), fit.size)
-        assertEquals(IntOffset(0, 200), fit.offset)
+        assertEquals(ContentPoint(0, 0), pointInContent(fit, 480, 800, x = 260f, y = 0f))
+        assertEquals(
+            ContentPoint(479, 799),
+            pointInContent(fit, 480, 800, x = 260f + 479.9f, y = 799.9f),
+            "правый нижний угол не попал в последний пиксель",
+        )
     }
 
     @Test
-    fun `proportions are preserved on any viewport`() {
-        val source = 480f / 800f
+    fun `the round trip agrees at every pixel`() {
+        // Прямой ход масштабирует, обратный делит. Расхождение накапливается
+        // именно на краях пикселей, поэтому проверяется каждый.
+        val fit = fitInside(64, 48, viewportWidth = 640f, viewportHeight = 480f)
+        val scale = fit.size.width / 64f
 
-        for (width in listOf(100f, 333f, 1080f, 4000f)) {
-            for (height in listOf(100f, 640f, 1777f, 3000f)) {
-                val fit = fitInside(480, 800, width, height)
-                val ratio = fit.size.width.toFloat() / fit.size.height
-                // Округление до целых пикселей — единственный источник расхождения.
-                assertTrue(
-                    kotlin.math.abs(ratio - source) < 0.02f,
-                    "пропорции поехали на $width×$height: $ratio вместо $source",
-                )
-            }
+        for (pixel in 0 until 64) {
+            // Середина пикселя обязана попасть в него же.
+            val middle = fit.offset.x + (pixel + 0.5f) * scale
+            assertEquals(
+                pixel,
+                pointInContent(fit, 64, 48, x = middle, y = fit.offset.y + 1f)?.x,
+                "середина пикселя $pixel попала не туда",
+            )
         }
     }
 
     @Test
-    fun `content never sticks out of the viewport`() {
-        for (width in listOf(1f, 17f, 1080f)) {
-            for (height in listOf(1f, 17f, 1920f)) {
-                val fit = fitInside(480, 800, width, height)
-                assertTrue(fit.size.width <= width + 1, "шире вьюпорта на $width×$height")
-                assertTrue(fit.size.height <= height + 1, "выше вьюпорта на $width×$height")
-                assertTrue(fit.offset.x >= 0 && fit.offset.y >= 0, "смещение отрицательное")
-            }
-        }
-    }
+    fun `an empty viewport gives nothing`() {
+        val fit = fitInside(480, 800, 0f, 0f)
 
-    @Test
-    fun `degenerate sizes give nothing to draw instead of dividing by zero`() {
-        assertEquals(IntSize(0, 0), fitInside(0, 800, 100f, 100f).size)
-        assertEquals(IntSize(0, 0), fitInside(480, 0, 100f, 100f).size)
-        assertEquals(IntSize(0, 0), fitInside(480, 800, 0f, 100f).size)
-        assertEquals(IntSize(0, 0), fitInside(480, 800, 100f, 0f).size)
+        assertEquals(0, fit.size.width)
+        assertNull(pointInContent(fit, 480, 800, x = 0f, y = 0f))
     }
 }

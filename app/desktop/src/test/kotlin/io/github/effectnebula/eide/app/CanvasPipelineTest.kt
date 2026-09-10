@@ -75,6 +75,84 @@ class CanvasPipelineTest {
     }
 
     @Test
+    fun `events posted by the IDE reach the program`() {
+        // Стык двух языков и трёх описаний одной структуры: C, ctypes и Kotlin.
+        // Ни один компилятор его не проверяет, поэтому проверяется он здесь —
+        // настоящей программой на Python, читающей то, что положил Kotlin.
+        DesktopCanvasArea.create(width, height).use { area ->
+            assertTrue(area.postEvent(type = 1, pointer = 0, x = 12, y = 34), "событие не положилось")
+            assertTrue(area.postEvent(type = 2, pointer = 0, x = 56, y = 78, key = 9, modifiers = 3))
+            assertTrue(area.postEvent(type = 3, pointer = 1, x = 90, y = 11))
+
+            val recorder = runProgram(
+                area,
+                """
+                import eide
+
+                canvas = eide.canvas()
+                for event in canvas.events():
+                    print(event.type, event.pointer, event.x, event.y, event.key, event.modifiers)
+                print('готово')
+                """.trimIndent(),
+            )
+
+            assertEquals(0, recorder.exitCode, "программа упала: ${recorder.err}")
+            assertEquals(
+                """
+                1 0 12 34 0 0
+                2 0 56 78 9 3
+                3 1 90 11 0 0
+                готово
+                """.trimIndent() + "\n",
+                recorder.out.toString(),
+                "события приехали не те",
+            )
+        }
+    }
+
+    @Test
+    fun `an odd canvas size keeps both sides agreeing where the ring is`() {
+        // Кольцо лежит за пикселями, выровненное на кэш-линию. Выравнивание
+        // считают обе стороны отдельно, и разойтись им ничего не мешает: при
+        // 64×48 пиксели и так кончаются на границе линии, и ошибка невидима.
+        // Здесь размер выбран так, что выравнивание что-то меняет.
+        DesktopCanvasArea.create(width = 65, height = 49).use { area ->
+            assertTrue(area.postEvent(type = 2, pointer = 0, x = 7, y = 8), "событие не положилось")
+
+            val recorder = runProgram(
+                area,
+                """
+                import eide
+
+                canvas = eide.canvas()
+                events = list(canvas.events())
+                print(len(events), events[0].x, events[0].y)
+                """.trimIndent(),
+            )
+
+            assertEquals(0, recorder.exitCode, "программа упала: ${recorder.err}")
+            assertEquals("1 7 8\n", recorder.out.toString(), "кольцо нашлось не там")
+        }
+    }
+
+    @Test
+    fun `a full ring is reported to the IDE`() {
+        DesktopCanvasArea.create(width, height).use { area ->
+            // Ёмкость кольца знает только C; здесь важно лишь, что переполнение
+            // не молчит, а сообщается — иначе потерянный ввод не отличить от
+            // непришедшего.
+            var posted = 0
+            while (area.postEvent(type = 2, pointer = 0, x = posted, y = 0)) {
+                posted++
+                if (posted > 10_000) break
+            }
+
+            assertTrue(posted in 1..10_000, "кольцо не заполнилось: $posted")
+            assertEquals(1L, area.droppedEvents(), "потеря не учтена")
+        }
+    }
+
+    @Test
     fun `a program draws and the frame reaches the reader`() {
         DesktopCanvasArea.create(width, height).use { area ->
             assertEquals(0L, area.latestFrame(), "кадры появились раньше программы")

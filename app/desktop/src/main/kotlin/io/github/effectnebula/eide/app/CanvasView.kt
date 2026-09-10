@@ -14,11 +14,17 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asComposeImageBitmap
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
+import io.github.effectnebula.eide.ui.canvas.ContentPoint
+import io.github.effectnebula.eide.ui.canvas.FitResult
 import io.github.effectnebula.eide.ui.canvas.fitInside
+import io.github.effectnebula.eide.ui.canvas.pointInContent
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
@@ -56,7 +62,39 @@ fun CanvasView(area: DesktopCanvasArea, modifier: Modifier = Modifier) {
         }
     }
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
+    // Куда вписан кадр — знает только отрисовка, а нужно это и вводу.
+    // Пишется в фазе отрисовки, читается в обработчике указателя: обычное
+    // поле, а не состояние Compose, потому что перерисовку это менять
+    // не должно.
+    val placement = remember(area) {
+        FramePlacement().apply {
+            contentWidth = area.width
+            contentHeight = area.height
+        }
+    }
+
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(area) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val type = when (event.type) {
+                            PointerEventType.Press -> EVENT_POINTER_DOWN
+                            PointerEventType.Move -> EVENT_POINTER_MOVE
+                            PointerEventType.Release -> EVENT_POINTER_UP
+                            else -> continue
+                        }
+                        for ((index, change) in event.changes.withIndex()) {
+                            val point = placement.contentPoint(change.position) ?: continue
+                            area.postEvent(type, pointer = index, x = point.x, y = point.y)
+                        }
+                    }
+                }
+            }
+    ) {
         Canvas(Modifier.fillMaxSize()) {
             // Чтение — подписка: без него холст не перерисуется на новый кадр.
             @Suppress("UNUSED_EXPRESSION")
@@ -65,6 +103,7 @@ fun CanvasView(area: DesktopCanvasArea, modifier: Modifier = Modifier) {
             if (frame == 0L) return@Canvas
 
             val fit = fitInside(area.width, area.height, size.width, size.height)
+            placement.fit = fit
             drawImage(
                 image = bitmap.asComposeImageBitmap(),
                 srcOffset = IntOffset.Zero,
@@ -78,3 +117,26 @@ fun CanvasView(area: DesktopCanvasArea, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * Где на экране лежит кадр — общее знание отрисовки и ввода.
+ *
+ * Отдельный объект, а не состояние Compose: значение меняется каждый кадр,
+ * и подписка на него означала бы пересборку шестьдесят раз в секунду ради
+ * числа, которое нужно только обработчику пальца.
+ */
+private class FramePlacement {
+    var fit: FitResult? = null
+    var contentWidth: Int = 0
+    var contentHeight: Int = 0
+
+    fun contentPoint(position: Offset): ContentPoint? {
+        val current = fit ?: return null
+        return pointInContent(current, contentWidth, contentHeight, position.x, position.y)
+    }
+}
+
+/* Виды событий: те же числа, что EC_EVENT_* в eide_canvas.h. */
+private const val EVENT_POINTER_DOWN = 1
+private const val EVENT_POINTER_MOVE = 2
+private const val EVENT_POINTER_UP = 3

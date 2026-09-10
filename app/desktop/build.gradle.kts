@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     id("eide.compose-jvm-app")
 }
@@ -24,15 +26,19 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     dependsOn(rootProject.tasks.named("canvasLibrary"))
 
-    systemProperty(
-        "eide.canvasLib",
-        rootProject.layout.buildDirectory.file("native-canvas/lib/libeide_canvas.so")
-            .get().asFile.absolutePath,
-    )
-    systemProperty(
-        "eide.shimDir",
-        rootProject.layout.projectDirectory.dir("native/canvas/python").asFile.absolutePath,
-    )
+    val library = rootProject.layout.buildDirectory
+        .file("native-canvas/lib/libeide_canvas.so").get().asFile
+    val shim = rootProject.layout.projectDirectory.dir("native/canvas/python").asFile
+
+    // Библиотека и шим объявлены входами намеренно. Без этого Gradle считает
+    // тест актуальным, пока не менялся Kotlin, — а он проверяет как раз стык
+    // Kotlin с C. Правка в C давала зелёную сборку при сломанном стыке: так
+    // в ветку уехало несовпадение версии области, и нашлось оно случайно.
+    inputs.file(library).withPathSensitivity(PathSensitivity.NONE)
+    inputs.dir(shim).withPathSensitivity(PathSensitivity.RELATIVE)
+
+    systemProperty("eide.canvasLib", library.absolutePath)
+    systemProperty("eide.shimDir", shim.absolutePath)
 }
 
 compose.desktop {
@@ -69,6 +75,7 @@ tasks.withType<JavaExec>().configureEach {
     System.getProperty("eide.canvas")?.let { systemProperty("eide.canvas", it) }
     System.getProperty("eide.search")?.let { systemProperty("eide.search", it) }
     System.getProperty("eide.fold")?.let { systemProperty("eide.fold", it) }
+    System.getProperty("eide.drag")?.let { systemProperty("eide.drag", it) }
 
     // Пути к нативной библиотеке и шиму — те же, что у тестов. В собранном
     // дистрибутиве они поедут вместе с приложением; до упаковки графика на

@@ -70,6 +70,7 @@ import io.github.effectnebula.eide.ui.widgets.NoticeBar
 import androidx.compose.runtime.CompositionLocalProvider
 import java.awt.Rectangle
 import java.awt.Robot
+import java.awt.event.InputEvent
 import java.awt.Toolkit
 import java.io.File
 import javax.imageio.ImageIO
@@ -103,6 +104,7 @@ fun main() = application {
         Debug.screenshot?.let { path ->
             LaunchedEffect(Unit) {
                 delay(SCREENSHOT_SETTLE_MS)
+                Debug.drag?.let { dragMouse(it) }
                 captureScreen(File(path))
                 exitProcess(0)
             }
@@ -553,6 +555,15 @@ private object Debug {
      */
     val fold: Int? get() = System.getProperty("eide.fold")?.toIntOrNull()
 
+    /**
+     * `-Deide.drag=x1,y1,x2,y2` — провести мышью по экрану перед снимком.
+     *
+     * Единственный способ проверить путь ввода целиком, не имея рук: события
+     * идут через настоящий X-сервер, Compose, кольцо в разделяемой памяти и
+     * программу на Python — и возвращаются нарисованными.
+     */
+    val drag: String? get() = System.getProperty("eide.drag")
+
     /** `-Deide.search=что` — открыть поиск с готовым запросом. */
     val search: String? get() = System.getProperty("eide.search")
     val showSearch: Boolean get() = search != null
@@ -582,6 +593,41 @@ private const val SCREENSHOT_SETTLE_MS = 2_500L
  * оно со смещением: снимок по ним съезжает и режет край. Экран целиком не
  * съезжает никогда.
  */
+/**
+ * Проводит мышью от одной точки к другой с нажатой кнопкой.
+ *
+ * Промежуточные точки обязательны: без них программа получит нажатие и
+ * отпускание, но ни одного движения, а проверить надо как раз движение.
+ */
+private suspend fun dragMouse(path: String) {
+    val numbers = path.split(',').mapNotNull { it.trim().toIntOrNull() }
+    if (numbers.size != 4) {
+        System.err.println("-Deide.drag ждёт четыре числа: x1,y1,x2,y2")
+        return
+    }
+
+    runCatching {
+        val robot = Robot()
+        val (x1, y1, x2, y2) = numbers
+        robot.mouseMove(x1, y1)
+        robot.mousePress(InputEvent.BUTTON1_DOWN_MASK)
+
+        val steps = 40
+        for (step in 1..steps) {
+            robot.mouseMove(
+                x1 + (x2 - x1) * step / steps,
+                y1 + (y2 - y1) * step / steps,
+            )
+            delay(DRAG_STEP_MS)
+        }
+        robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK)
+        delay(DRAG_SETTLE_MS)
+    }.onFailure { System.err.println("не получилось провести мышью: $it") }
+}
+
+private const val DRAG_STEP_MS = 8L
+private const val DRAG_SETTLE_MS = 300L
+
 private fun captureScreen(target: File) {
     runCatching {
         val screen = Toolkit.getDefaultToolkit().screenSize
