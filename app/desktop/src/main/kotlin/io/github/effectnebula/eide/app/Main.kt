@@ -41,6 +41,8 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.editor.FoldState
+import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.Highlighters
 import io.github.effectnebula.eide.core.project.ProjectTree
@@ -472,6 +474,14 @@ private fun RunPanel(
 
         if (active != null) {
             val marks = rememberGutterMarks(active.state, compute = gitMarks(git, active.file))
+            // Своя свёртка на файл: свёрнутое переживает переключение вкладок.
+            val folds = remember(active.file) {
+                FoldState().apply {
+                    Debug.fold?.let { line ->
+                        IndentFolding.regionAt(active.state.text, line - 1)?.let { fold(it) }
+                    }
+                }
+            }
 
             // То же автосохранение, что на телефоне. Десктоп не убивают внезапно,
             // но правило «сначала десктоп» тут было нарушено: поведение писалось
@@ -489,6 +499,7 @@ private fun RunPanel(
                 fontSizeSp = fontSizeSp,
                 onFontSizeChange = onFontSizeChange,
                 gutterMarks = marks.value,
+                folds = folds,
             )
         } else {
             Box(Modifier.weight(1f).padding(16.dp)) {
@@ -532,6 +543,15 @@ private object Debug {
 
     /** `-Deide.canvas` — открыть вкладку графики сразу. */
     val showCanvas: Boolean get() = System.getProperty("eide.canvas") != null
+
+    /**
+     * `-Deide.fold=7` — свернуть блок, начинающийся на этой строке (нумерация
+     * как в гаттере, с единицы).
+     *
+     * Существует по той же причине, что и остальные отладочные ключи: свёрнутый
+     * экран иначе не увидеть — самоснимок не умеет нажимать на треугольник.
+     */
+    val fold: Int? get() = System.getProperty("eide.fold")?.toIntOrNull()
 
     /** `-Deide.search=что` — открыть поиск с готовым запросом. */
     val search: String? get() = System.getProperty("eide.search")

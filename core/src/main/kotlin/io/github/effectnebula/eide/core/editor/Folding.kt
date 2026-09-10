@@ -27,31 +27,81 @@ data class FoldRegion(val header: Int, val last: Int) {
  */
 object IndentFolding {
 
+    /**
+     * Все свёртываемые участки документа.
+     *
+     * Стоит прохода по всему файлу, поэтому на кадре не зовётся: отрисовке
+     * хватает [isFoldable] по видимым строкам, а [regionAt] считается один раз
+     * при сворачивании.
+     */
     fun regions(text: Rope): List<FoldRegion> {
         val indents = IntArray(text.lineCount) { indentOf(text, it) }
         val regions = ArrayList<FoldRegion>()
 
         for (header in indents.indices) {
             if (indents[header] == BLANK) continue
-
-            var last = header
-            var line = header + 1
-            while (line < indents.size) {
-                val indent = indents[line]
-                // Пустая строка сама по себе блок не закрывает, но и не
-                // продлевает: закрывающие пустые строки в блок не входят.
-                if (indent == BLANK) {
-                    line++
-                    continue
-                }
-                if (indent <= indents[header]) break
-                last = line
-                line++
-            }
-
+            val last = lastLineOfBlock(header, indents.size, indents[header]) { indents[it] }
             if (last > header) regions += FoldRegion(header, last)
         }
         return regions
+    }
+
+    /**
+     * Начинается ли на этой строке свёртываемый участок.
+     *
+     * Дёшево: смотрит вперёд только до первой непустой строки. Этого достаточно,
+     * чтобы решить, рисовать ли треугольник в гаттере, а полную протяжённость
+     * блока считать до нажатия незачем.
+     */
+    fun isFoldable(text: Rope, header: Int): Boolean {
+        val own = indentOf(text, header)
+        if (own == BLANK) return false
+
+        var line = header + 1
+        while (line < text.lineCount) {
+            val indent = indentOf(text, line)
+            if (indent != BLANK) return indent > own
+            line++
+        }
+        return false
+    }
+
+    /**
+     * Участок, начинающийся на этой строке, либо null.
+     *
+     * Считается по нажатию, а не на кадре: в худшем случае это проход до конца
+     * файла — ровно один раз на сворачивание.
+     */
+    fun regionAt(text: Rope, header: Int): FoldRegion? {
+        val own = indentOf(text, header)
+        if (own == BLANK) return null
+
+        val last = lastLineOfBlock(header, text.lineCount, own) { indentOf(text, it) }
+        return if (last > header) FoldRegion(header, last) else null
+    }
+
+    /** Последняя строка блока: общий проход для обоих способов счёта. */
+    private inline fun lastLineOfBlock(
+        header: Int,
+        lineCount: Int,
+        headerIndent: Int,
+        indentOf: (Int) -> Int,
+    ): Int {
+        var last = header
+        var line = header + 1
+        while (line < lineCount) {
+            val indent = indentOf(line)
+            // Пустая строка сама по себе блок не закрывает, но и не продлевает:
+            // закрывающие пустые строки в блок не входят.
+            if (indent == BLANK) {
+                line++
+                continue
+            }
+            if (indent <= headerIndent) break
+            last = line
+            line++
+        }
+        return last
     }
 
     /** Отступ строки в знаках, либо [BLANK] для пустой и состоящей из пробелов. */

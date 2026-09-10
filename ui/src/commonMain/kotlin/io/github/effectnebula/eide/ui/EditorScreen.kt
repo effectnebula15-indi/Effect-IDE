@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.editor.FoldState
 import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.LineHighlighter
 import io.github.effectnebula.eide.core.syntax.TokenKind
@@ -49,6 +50,11 @@ fun EditorScreen(
      */
     onFontSizeChange: ((Float) -> Unit)? = null,
     gutterMarks: Map<Int, GutterMark> = emptyMap(),
+    /**
+     * Свёртка блоков. Живёт снаружи вместе с файлом: свёрнутое должно
+     * переживать переключение вкладок.
+     */
+    folds: FoldState? = null,
 ) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
@@ -60,6 +66,7 @@ fun EditorScreen(
             fontSizeSp = fontSizeSp,
             onFontSizeChange = onFontSizeChange,
             gutterMarks = gutterMarks,
+            folds = folds,
         )
 
         StatusBar(state)

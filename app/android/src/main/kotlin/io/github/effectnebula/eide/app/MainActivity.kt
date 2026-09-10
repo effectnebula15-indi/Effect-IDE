@@ -44,6 +44,7 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.editor.FoldState
 import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.Highlighters
 import io.github.effectnebula.eide.core.project.OpenFile
@@ -395,6 +396,8 @@ private fun WorkbenchScreen(
                     highlighter = Highlighters.forFile(active.name),
                     fontSizeSp = fontSizeSp,
                     onFontSizeChange = onFontSizeChange,
+                    // Своя свёртка на файл: свёрнутое переживает переключение вкладок.
+                    folds = remember(active.file) { FoldState() },
                 )
             } else {
                 Label("откройте файл во вкладке «проект»", TextDim, 13)

@@ -81,6 +81,40 @@ class FoldingTest {
         assertEquals(listOf(FoldRegion(0, 1)), IndentFolding.regions(text))
     }
 
+    // --- два дешёвых способа спросить то же самое ------------------------------
+
+    @Test
+    fun `the cheap check agrees with the full pass`() {
+        // isFoldable и regionAt существуют ради цены: полный проход по файлу на
+        // кадре недопустим. Отвечать они обязаны то же самое, что полный проход,
+        // иначе треугольник в гаттере будет обещать не то, что случится по нажатию.
+        val text = rope(
+            "class Имя:",
+            "    def первый(self):",
+            "        тело = 1",
+            "",
+            "    def второй(self):",
+            "        тело = 2",
+            "снаружи = 3",
+            "",
+        )
+
+        val full = IndentFolding.regions(text).associateBy { it.header }
+
+        for (line in 0 until text.lineCount) {
+            assertEquals(
+                full.containsKey(line),
+                IndentFolding.isFoldable(text, line),
+                "строка $line: дешёвая проверка разошлась с полным проходом",
+            )
+            assertEquals(
+                full[line],
+                IndentFolding.regionAt(text, line),
+                "строка $line: участок по нажатию разошёлся с полным проходом",
+            )
+        }
+    }
+
     // --- перевод номеров -------------------------------------------------------
 
     /** Прямой перебор: заведомо правильно, заведомо медленно. */

@@ -26,6 +26,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
@@ -42,6 +43,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.editor.FoldState
+import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.LineHighlighter
 import io.github.effectnebula.eide.core.syntax.TokenKind
@@ -90,6 +93,8 @@ fun CodeEditor(
     highlighter: LineHighlighter = LineHighlighter.None,
     /** Пометки правок по номерам строк — см. [rememberGutterMarks]. */
     gutterMarks: Map<Int, GutterMark> = emptyMap(),
+    /** Свёртка блоков. `null` — свёртки нет, гаттер без треугольников. */
+    folds: FoldState? = null,
     /**
      * Куда сообщать новый размер шрифта, выбранный двумя пальцами. `null` —
      * жест не подключается: размер задаёт тот, кто рисует редактор.
@@ -114,6 +119,14 @@ fun CodeEditor(
     // снова. Смена размера редка, потерять кэш на ней не жалко.
     val cache = remember(style) { LineLayoutCache<TextLayoutResult>() }
     val lineStates = remember(highlighter) { LineStates(highlighter) }
+    // Пустое состояние вместо null: арифметика ниже не должна ветвиться на
+    // каждой строке, а без свёрнутых участков перевод номеров — тождество.
+    val folding = folds ?: remember { FoldState() }
+    val foldsEnabled = folds != null
+    // FoldState — обычный объект, снапшот-система за ним не следит. Счётчик
+    // поднимается на каждое сворачивание: то же решение, что для EditorState,
+    // и по той же причине.
+    var foldRevision by remember { mutableIntStateOf(0) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -171,7 +184,7 @@ fun CodeEditor(
     // пересборки на каждое нажатие мы как раз избегаем.
     val scrollState = rememberScrollableState { delta ->
         val previous = scrollPx
-        scrollPx = (scrollPx - delta).coerceIn(0f, maxScrollPx(state, metrics, viewportHeight))
+        scrollPx = (scrollPx - delta).coerceIn(0f, maxScrollPx(state, folding, metrics, viewportHeight))
         previous - scrollPx
     }
 
@@ -196,7 +209,7 @@ fun CodeEditor(
     // ключи пересчитываются только при пересборке, а её здесь намеренно нет.
     LaunchedEffect(revision) {
         snapshotFlow { revision.longValue }.collectLatest {
-            scrollPx = scrollToCaret(state, metrics, scrollPx, viewportHeight)
+            scrollPx = scrollToCaret(state, folding, metrics, scrollPx, viewportHeight)
             scrollXPx = scrollXToCaret(
                 caret = caretBounds(state, lineLayout),
                 scrollXPx = scrollXPx,
@@ -232,9 +245,34 @@ fun CodeEditor(
                 detectTapGestures { position ->
                     val text = state.text
                     val gutter = gutterWidthPx(text.lineCount, metrics)
+
+                    // Тычок в гаттер по строке с треугольником сворачивает блок.
+                    // По строке без треугольника — ставит курсор в её начало,
+                    // как и раньше.
+                    if (foldsEnabled && position.x < gutter) {
+                        val visibleCount = folding.visibleLineCount(text.lineCount).coerceAtLeast(1)
+                        val visual = ((position.y + scrollPx) / metrics.height)
+                            .toInt()
+                            .coerceIn(0, visibleCount - 1)
+                        val line = folding.documentLine(visual, text.lineCount)
+                        val region = IndentFolding.regionAt(text, line)
+                        if (region != null) {
+                            folding.toggle(region)
+                            // Курсор, оказавшийся внутри свёрнутого, уводится на
+                            // заголовок: иначе следующая же буква правит текст,
+                            // которого на экране нет.
+                            val head = state.carets.primary.head
+                            if (folding.isHidden(text.lineOf(head))) {
+                                state.setCarets(CaretSet.single(text.lineStart(region.header)))
+                            }
+                            foldRevision++
+                            return@detectTapGestures
+                        }
+                    }
+
                     state.setCarets(
                         CaretSet.single(
-                            offsetAt(text, metrics, gutter, scrollPx, scrollXPx, position) { line, x ->
+                            offsetAt(text, folding, metrics, gutter, scrollPx, scrollXPx, position) { line, x ->
                                 lineLayout(line).getOffsetForPosition(Offset(x, 0f))
                             }
                         )
@@ -263,7 +301,7 @@ fun CodeEditor(
             while (true) {
                 withFrameNanos { now ->
                     if (previous != 0L) {
-                        val limit = maxScrollPx(state, metrics, viewportHeight)
+                        val limit = maxScrollPx(state, folding, metrics, viewportHeight)
                         val step = probe.autoScrollPxPerSecond * (now - previous) / 1_000_000_000f
                         // Дойдя до конца, начинаем сначала: замер идёт непрерывно.
                         scrollPx = if (scrollPx + step >= limit) 0f else scrollPx + step
@@ -286,8 +324,10 @@ fun CodeEditor(
             viewportHeight = size.height.roundToInt()
             viewportWidth = size.width.roundToInt()
             // Чтение ревизии в фазе отрисовки — это подписка: правка перерисует
-            // холст, не трогая пересборку.
+            // холст, не трогая пересборку. То же и для свёртки.
             revision.longValue
+            @Suppress("UNUSED_EXPRESSION")
+            foldRevision
             widestLinePx = max(
                 widestLinePx,
                 drawEditor(
@@ -304,6 +344,8 @@ fun CodeEditor(
                     caretVisible = caretVisible,
                     search = search,
                     gutterMarks = gutterMarks,
+                    folds = folding,
+                    foldable = { line -> foldsEnabled && IndentFolding.isFoldable(state.text, line) },
                 ),
             )
             probe?.let {
@@ -321,6 +363,10 @@ private const val CARET_BLINK_MS = 530L
 private const val CARET_WIDTH_PX = 2f
 private const val GUTTER_PADDING_DIGITS = 2
 private const val VCS_MARK_WIDTH_PX = 3f
+
+/** Треугольник свёртки: доля высоты строки и отступ от номера в ширинах цифры. */
+private const val FOLD_MARKER_SCALE = 0.45f
+private const val FOLD_MARKER_COLUMNS = 0.6f
 private const val DELETED_MARK_HEIGHT_PX = 2f
 
 /**
@@ -343,8 +389,15 @@ internal fun gutterWidthPx(lineCount: Int, metrics: LineMetrics): Float {
  * должна доводиться до середины экрана, иначе на ней неудобно работать —
  * особенно на телефоне, где низ экрана занят клавиатурой.
  */
-private fun maxScrollPx(state: EditorState, metrics: LineMetrics, viewportHeight: Int): Float =
-    max(0f, state.text.lineCount * metrics.height - viewportHeight / 2f)
+private fun maxScrollPx(
+    state: EditorState,
+    folds: FoldState,
+    metrics: LineMetrics,
+    viewportHeight: Int,
+): Float {
+    val visible = folds.visibleLineCount(state.text.lineCount).coerceAtLeast(1)
+    return max(0f, visible * metrics.height - viewportHeight / 2f)
+}
 
 /** Рисует видимые строки и возвращает ширину самой широкой из них. */
 private fun DrawScope.drawEditor(
@@ -361,20 +414,29 @@ private fun DrawScope.drawEditor(
     caretVisible: Boolean,
     search: SearchSession?,
     gutterMarks: Map<Int, GutterMark>,
+    folds: FoldState,
+    foldable: (Int) -> Boolean,
 ): Float {
     val text = state.text
     if (metrics.height <= 0f) return 0f
 
-    val first = (scrollPx / metrics.height).toInt().coerceAtLeast(0)
-    val visible = (size.height / metrics.height).roundToInt() + 2
-    val last = min(first + visible, text.lineCount)
+    // Здесь и ниже `visual` — номер строки на экране, `line` — номер в файле.
+    // Со свёрткой это разные вещи, и путаница между ними — главный источник
+    // ошибок свёртки (см. core-folding.md).
+    val visibleCount = folds.visibleLineCount(text.lineCount).coerceAtLeast(1)
+    val firstVisual = (scrollPx / metrics.height).toInt().coerceAtLeast(0)
+    val rows = (size.height / metrics.height).roundToInt() + 2
+    val lastVisual = min(firstVisual + rows, visibleCount)
 
     // Совпадения ищутся только в видимых строках: искать по всему документу
     // ради подсветки экрана — это проход по мегабайтам на каждый кадр.
-    val matches = if (search == null || last <= first) {
+    val matches = if (search == null || lastVisual <= firstVisual) {
         emptyList()
     } else {
-        search.matchesIn(text.lineStart(first), text.lineEnd(last - 1))
+        search.matchesIn(
+            text.lineStart(folds.documentLine(firstVisual, text.lineCount)),
+            text.lineEnd(folds.documentLine(lastVisual - 1, text.lineCount)),
+        )
     }
 
     drawRect(colors.gutterBackground, size = Size(gutterWidth, size.height))
@@ -391,8 +453,9 @@ private fun DrawScope.drawEditor(
     // а не поверх номеров строк.
     clipRect(left = gutterWidth) {
         translate(left = -scrollXPx, top = -scrollPx) {
-            for (line in first until last) {
-                val top = line * metrics.height
+            for (visual in firstVisual until lastVisual) {
+                val line = folds.documentLine(visual, text.lineCount)
+                val top = visual * metrics.height
                 val lineStart = text.lineStart(line)
                 val lineEnd = text.lineEnd(line)
 
@@ -425,19 +488,22 @@ private fun DrawScope.drawEditor(
     // Гаттер рисуется отдельно и без горизонтального сдвига: это неподвижный
     // столбец, и уезжать вместе с текстом он не должен.
     translate(top = -scrollPx) {
-        for (line in first until last) {
-            drawGutterMark(gutterMarks[line], colors, metrics, line * metrics.height)
+        for (visual in firstVisual until lastVisual) {
+            val line = folds.documentLine(visual, text.lineCount)
+            val top = visual * metrics.height
+            drawGutterMark(gutterMarks[line], colors, metrics, top)
 
             val number = (line + 1).toString()
             val numberLayout = cache.get(GUTTER_KEY_PREFIX + number) { measurer.measure(number, style) }
             drawText(
                 numberLayout,
                 color = if (line in caretLines) colors.currentLineGutterText else colors.gutterText,
-                topLeft = Offset(
-                    gutterWidth - numberLayout.size.width - metrics.digitWidth,
-                    line * metrics.height,
-                ),
+                topLeft = Offset(gutterWidth - numberLayout.size.width - metrics.digitWidth, top),
             )
+
+            if (foldable(line)) {
+                drawFoldMarker(folds.isFolded(line), colors, metrics, gutterWidth, top)
+            }
         }
     }
 
@@ -472,6 +538,39 @@ private fun DrawScope.drawGutterMark(
         topLeft = Offset(0f, top),
         size = Size(VCS_MARK_WIDTH_PX, metrics.height),
     )
+}
+
+/**
+ * Треугольник свёртки в гаттере.
+ *
+ * Рисуется прямо, без шрифта: символ ▾ есть не во всяком моноширинном шрифте,
+ * а подставлять запасной ради одного знака — менять ширину гаттера.
+ */
+private fun DrawScope.drawFoldMarker(
+    folded: Boolean,
+    colors: EditorColors,
+    metrics: LineMetrics,
+    gutterWidth: Float,
+    top: Float,
+) {
+    val size = metrics.height * FOLD_MARKER_SCALE
+    val left = gutterWidth - metrics.digitWidth * FOLD_MARKER_COLUMNS
+    val middle = top + metrics.height / 2f
+
+    val path = Path().apply {
+        if (folded) {
+            // Свёрнуто — стрелка вправо: «здесь спрятано».
+            moveTo(left, middle - size / 2f)
+            lineTo(left + size / 2f, middle)
+            lineTo(left, middle + size / 2f)
+        } else {
+            moveTo(left - size / 2f, middle - size / 4f)
+            lineTo(left + size / 2f, middle - size / 4f)
+            lineTo(left, middle + size / 2f)
+        }
+        close()
+    }
+    drawPath(path, color = colors.gutterText)
 }
 
 private fun DrawScope.drawSelection(
@@ -585,6 +684,7 @@ private fun highlighted(
 /** Куда поставить курсор по касанию. */
 internal fun offsetAt(
     text: Rope,
+    folds: FoldState,
     metrics: LineMetrics,
     gutterWidth: Float,
     scrollPx: Float,
@@ -592,7 +692,9 @@ internal fun offsetAt(
     position: Offset,
     columnAt: (line: Int, x: Float) -> Int,
 ): Int {
-    val line = ((position.y + scrollPx) / metrics.height).toInt().coerceIn(0, text.lineCount - 1)
+    val visibleCount = folds.visibleLineCount(text.lineCount).coerceAtLeast(1)
+    val visual = ((position.y + scrollPx) / metrics.height).toInt().coerceIn(0, visibleCount - 1)
+    val line = folds.documentLine(visual, text.lineCount)
     val lineStart = text.lineStart(line)
     val lineEnd = text.lineEnd(line)
 
@@ -639,13 +741,16 @@ internal fun scrollXToCaret(caret: CaretBounds, scrollXPx: Float, textWidth: Flo
 /** Прокручивает так, чтобы курсор остался виден. */
 internal fun scrollToCaret(
     state: EditorState,
+    folds: FoldState,
     metrics: LineMetrics,
     scrollPx: Float,
     viewportHeight: Int,
 ): Float {
     if (viewportHeight <= 0 || metrics.height <= 0f) return scrollPx
     val line = state.text.lineOf(state.carets.primary.head)
-    val top = line * metrics.height
+    // Курсор внутри свёрнутого блока показывается на самом блоке: прокручивать
+    // к строке, которой на экране нет, значит уехать в пустоту.
+    val top = folds.visualLine(line, state.text.lineCount) * metrics.height
     val bottom = top + metrics.height
 
     return when {

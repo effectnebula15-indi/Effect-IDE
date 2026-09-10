@@ -334,7 +334,7 @@ class CodeEditorUiTest {
  * версии нет, а тот, что находится по имени, относится к касанию.
  */
 @OptIn(ExperimentalTestApi::class)
-private fun MouseInjectionScope.clickAt(position: Offset) {
+internal fun MouseInjectionScope.clickAt(position: Offset) {
     moveTo(position)
     press()
     release()
@@ -345,7 +345,7 @@ private class TapProbe(val layout: TextLayoutResult, val gutter: Float)
 
 /** Касание в заданной точке: готового `click` у сценария касаний тоже нет. */
 @OptIn(ExperimentalTestApi::class)
-private fun TouchInjectionScope.tapAt(position: Offset) {
+internal fun TouchInjectionScope.tapAt(position: Offset) {
     down(position)
     up(0)
 }
