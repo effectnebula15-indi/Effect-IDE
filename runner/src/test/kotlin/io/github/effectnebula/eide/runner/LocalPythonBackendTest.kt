@@ -42,6 +42,31 @@ class LocalPythonBackendTest {
          */
         val arrived = mutableListOf<Pair<String, String>>()
 
+        /**
+         * То же самое, но без границ кусков: подряд идущие куски одного потока
+         * склеены, пустые выброшены.
+         *
+         * Труба не обещает, что одна запись программы придёт одним чтением.
+         * Первая редакция теста этого не учла: локально каждая строка приходила
+         * целиком, а на другой машине перевод строки приехал отдельным куском,
+         * и сравнение списка кусков развалилось. Проверять надо порядок
+         * источников и текста, а не то, как труба его нарезала.
+         */
+        @Synchronized fun merged(): List<Pair<String, String>> {
+            val result = mutableListOf<Pair<String, StringBuilder>>()
+            for ((source, chunk) in arrived) {
+                val previous = result.lastOrNull()
+                if (previous != null && previous.first == source) {
+                    previous.second.append(chunk)
+                } else {
+                    result += source to StringBuilder(chunk)
+                }
+            }
+            return result
+                .map { (source, text) -> source to text.toString().trim() }
+                .filter { (_, text) -> text.isNotEmpty() }
+        }
+
         private val done = CountDownLatch(1)
 
         override fun onStarted(pid: Int) {
@@ -138,10 +163,9 @@ class LocalPythonBackendTest {
             """.trimIndent()
         )
 
-        val order = recorder.arrived.map { (source, chunk) -> source to chunk.trim() }
         assertEquals(
             listOf("out" to "первая в вывод", "err" to "вторая в ошибки", "out" to "третья в вывод"),
-            order,
+            recorder.merged(),
         )
     }
 
