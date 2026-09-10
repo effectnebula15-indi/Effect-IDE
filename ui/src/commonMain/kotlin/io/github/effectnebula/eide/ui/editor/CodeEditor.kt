@@ -227,7 +227,7 @@ fun CodeEditor(
         Modifier
     } else {
         Modifier.fontZoom { factor ->
-            onFontSizeChange((fontSizeSp * factor).coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP))
+            onFontSizeChange(clampFontSize(fontSizeSp * factor))
         }
     }
 

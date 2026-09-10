@@ -59,7 +59,11 @@ import io.github.effectnebula.eide.ui.editor.rememberGutterMarks
 import io.github.effectnebula.eide.vcs.GitRepository
 import io.github.effectnebula.eide.vcs.LineMark
 import io.github.effectnebula.eide.ui.RenderBenchmark
+import io.github.effectnebula.eide.core.command.Command
 import io.github.effectnebula.eide.ui.benchmarkEditor
+import io.github.effectnebula.eide.ui.command.CommandPalette
+import io.github.effectnebula.eide.ui.editor.FONT_STEP_SP
+import io.github.effectnebula.eide.ui.editor.clampFontSize
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
@@ -69,6 +73,14 @@ import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
 import io.github.effectnebula.eide.ui.widgets.NoticeBar
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.event.InputEvent
@@ -295,6 +307,7 @@ private fun DesktopShell() {
                     fontSizeSp = fontSize,
                     onFontSizeChange = { fontSize = it },
                     onRunStarted = { awaitingFirstFrame = true },
+                    onProjectSearch = { showProjectSearch = true },
                     onChanged = { revision++ },
                 )
             }
@@ -388,6 +401,7 @@ private fun RunPanel(
     fontSizeSp: Float,
     onFontSizeChange: (Float) -> Unit,
     onRunStarted: () -> Unit,
+    onProjectSearch: () -> Unit,
     onChanged: () -> Unit,
 ) {
     var output by remember { mutableStateOf("") }
@@ -475,7 +489,66 @@ private fun RunPanel(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    var showPalette by remember { mutableStateOf(Debug.palette) }
+
+    /*
+     * Список команд пересобирается на каждое изменение состояния: «Запустить» и
+     * «Остановить» — это одно место в списке, и показывать надо ту, которую
+     * сейчас можно нажать. Палитра к смене списка готова (её тест на это есть).
+     */
+    val commands = remember(handle, showSearch, search != null) {
+        buildList {
+            add(Command("run.toggle", if (handle != null) "Остановить" else "Запустить", "Ctrl+R"))
+            add(Command("file.saveAll", "Сохранить всё", "Ctrl+S"))
+            if (search != null) add(Command("search.find", "Найти в файле", "Ctrl+F"))
+            add(Command("search.project", "Найти в проекте"))
+            add(Command("view.zoomIn", "Увеличить шрифт"))
+            add(Command("view.zoomOut", "Уменьшить шрифт"))
+        }
+    }
+
+    fun runCommand(command: Command) {
+        showPalette = false
+        when (command.id) {
+            "run.toggle" -> if (handle != null) handle?.stop() else run()
+            "file.saveAll" -> {
+                workspace.saveModified()
+                onChanged()
+            }
+            "search.find" -> showSearch = true
+            "search.project" -> onProjectSearch()
+            "view.zoomIn" -> onFontSizeChange(clampFontSize(fontSizeSp + FONT_STEP_SP))
+            "view.zoomOut" -> onFontSizeChange(clampFontSize(fontSizeSp - FONT_STEP_SP))
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            // Перехват до редактора: иначе сочетание уйдёт в текст. Preview
+            // работает сверху вниз, обычный onKeyEvent — снизу вверх, и до
+            // корня доходит только то, что не съели ниже.
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val command = event.isCtrlPressed || event.isMetaPressed
+                if (command && event.isShiftPressed && event.key == Key.P) {
+                    showPalette = !showPalette
+                    true
+                } else {
+                    false
+                }
+            }
+    ) {
+        if (showPalette) {
+            CommandPalette(
+                commands = commands,
+                onRun = ::runCommand,
+                onDismiss = { showPalette = false },
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
+        }
+
         Row(
             Modifier
                 .fillMaxWidth()
@@ -491,6 +564,7 @@ private fun RunPanel(
             if (search != null) {
                 Tab("Найти", showSearch) { showSearch = !showSearch }
             }
+            Tab("Команды", showPalette) { showPalette = true }
             BasicText(status, style = TextStyle(color = Eide.colors.textDim, fontSize = 12.sp))
         }
 
@@ -594,6 +668,9 @@ private object Debug {
 
     /** `-Deide.projectSearch=что` — открыть поиск по проекту с готовым запросом. */
     val projectSearch: String? get() = System.getProperty("eide.projectSearch")
+
+    /** `-Deide.palette` — открыть палитру команд. Нужно самоснимку: её не набрать. */
+    val palette: Boolean get() = System.getProperty("eide.palette") != null
 
     /** `-Deide.search=что` — открыть поиск с готовым запросом. */
     val search: String? get() = System.getProperty("eide.search")

@@ -63,6 +63,10 @@ import io.github.effectnebula.eide.ui.editorColors
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
+import io.github.effectnebula.eide.core.command.Command
+import io.github.effectnebula.eide.ui.command.CommandPalette
+import io.github.effectnebula.eide.ui.editor.FONT_STEP_SP
+import io.github.effectnebula.eide.ui.editor.clampFontSize
 import io.github.effectnebula.eide.ui.search.ProjectSearchPanel
 import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
@@ -177,6 +181,8 @@ private fun Shell() {
                 Screen.Project, Screen.Search, Screen.Code -> WorkbenchScreen(
                     panel = screen,
                     onFileOpened = { screen = Screen.Code },
+                    onShowTree = { screen = Screen.Project },
+                    onProjectSearch = { screen = Screen.Search },
                     canvas = canvas,
                     onShowCanvas = { showCanvas = true },
                     onRunStarted = { awaitingFirstFrame = true },
@@ -207,6 +213,8 @@ private fun Shell() {
 private fun WorkbenchScreen(
     panel: Screen,
     onFileOpened: () -> Unit,
+    onShowTree: () -> Unit,
+    onProjectSearch: () -> Unit,
     canvas: CanvasArea?,
     onShowCanvas: () -> Unit,
     onRunStarted: () -> Unit,
@@ -361,6 +369,50 @@ private fun WorkbenchScreen(
         return
     }
 
+    var showPalette by remember { mutableStateOf(false) }
+
+    /*
+     * На телефоне палитра нужнее, чем на десктопе: панель здесь одна, места под
+     * ряд кнопок нет, а меню в этом интерфейсе не заведено. Всё, чему не хватило
+     * кнопки, живёт тут — и другого пути к нему нет.
+     */
+    val commands = remember(handle, showSearch, search != null, active) {
+        buildList {
+            if (active != null) {
+                add(Command("run.toggle", if (handle != null) "Остановить" else "Запустить"))
+            }
+            add(Command("file.saveAll", "Сохранить всё"))
+            if (search != null) add(Command("search.find", "Найти в файле"))
+            add(Command("search.project", "Найти в проекте"))
+            add(Command("project.tree", "Показать дерево файлов"))
+            if (canvas != null) add(Command("view.canvas", "Показать графику"))
+            add(Command("view.zoomIn", "Увеличить шрифт"))
+            add(Command("view.zoomOut", "Уменьшить шрифт"))
+        }
+    }
+
+    fun runCommand(command: Command) {
+        showPalette = false
+        when (command.id) {
+            "run.toggle" -> if (handle != null) handle?.stop() else if (active != null) run()
+            "file.saveAll" -> {
+                saveNow()
+                workspaceRevision++
+            }
+            "search.find" -> showSearch = true
+            "search.project" -> onProjectSearch()
+            "project.tree" -> onShowTree()
+            "view.canvas" -> onShowCanvas()
+            "view.zoomIn" -> onFontSizeChange(clampFontSize(fontSizeSp + FONT_STEP_SP))
+            "view.zoomOut" -> onFontSizeChange(clampFontSize(fontSizeSp - FONT_STEP_SP))
+        }
+    }
+
+    if (showPalette) {
+        CommandPalette(commands, onRun = ::runCommand, onDismiss = { showPalette = false })
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().height(48.dp).background(Panel).padding(horizontal = 12.dp),
@@ -370,6 +422,7 @@ private fun WorkbenchScreen(
             Label(active?.name ?: "нет открытых файлов", TextColor, 13)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button("⌘", Panel) { showPalette = true }
                 if (search != null) {
                     Button("Найти", if (showSearch) Accent else Panel) { showSearch = !showSearch }
                 }
