@@ -43,6 +43,12 @@ class OpenFile internal constructor(
 class Workspace(
     val tree: ProjectTree,
     private val graphemes: GraphemeBreaker,
+    /**
+     * Выше этого порога файл открывается только на чтение (ADR-005). Параметром,
+     * а не константой: телефону может понадобиться порог ниже десктопного, и
+     * решать это должна точка сборки, а не ядро.
+     */
+    private val maxEditableBytes: Long = TextFiles.MAX_EDITABLE_BYTES,
 ) {
     private val opened = LinkedHashMap<String, OpenFile>()
 
@@ -68,7 +74,7 @@ class Workspace(
             return it
         }
 
-        val loaded = TextFiles.load(file)
+        val loaded = TextFiles.load(file, maxEditableBytes)
         val opened = OpenFile(
             file = file,
             format = loaded.format,

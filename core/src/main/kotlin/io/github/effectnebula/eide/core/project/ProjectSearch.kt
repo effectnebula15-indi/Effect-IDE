@@ -58,44 +58,16 @@ class ProjectSearch(private val tree: ProjectTree) {
         }
 
         val matches = ArrayList<ProjectMatch>()
-        var scanned = 0
-        var skipped = 0
-        var outcome = SearchOutcome.Complete
-
-        val queue = ArrayDeque<File>()
-        queue += tree.root
-
-        while (queue.isNotEmpty()) {
-            if (isCancelled()) return ProjectSearchResult(matches, SearchOutcome.Cancelled, scanned, skipped)
-
-            val folder = queue.removeFirst()
-            for (entry in tree.children(folder)) {
-                when (entry) {
-                    is ProjectFolder -> queue += entry.file
-                    is ProjectSource -> {
-                        val file = entry.file
-                        if (file.length() > maxFileBytes) {
-                            skipped++
-                            continue
-                        }
-
-                        val text = readText(file)
-                        if (text == null) {
-                            skipped++
-                            continue
-                        }
-
-                        scanned++
-                        val path = tree.relativePath(file) ?: file.name
-                        if (!collect(search, text, file, path, matches, limit)) {
-                            return ProjectSearchResult(matches, SearchOutcome.LimitReached, scanned, skipped)
-                        }
-                    }
-                }
-            }
+        val walk = walkSources(tree, maxFileBytes, isCancelled) { file, path, text ->
+            collect(search, text, file, path, matches, limit)
         }
 
-        return ProjectSearchResult(matches, outcome, scanned, skipped)
+        val outcome = when (walk.stop) {
+            WalkStop.Cancelled -> SearchOutcome.Cancelled
+            WalkStop.StoppedByVisitor -> SearchOutcome.LimitReached
+            WalkStop.Finished -> SearchOutcome.Complete
+        }
+        return ProjectSearchResult(matches, outcome, walk.scanned, walk.skipped)
     }
 
     /** Возвращает false, когда потолок достигнут. */
@@ -148,22 +120,6 @@ class ProjectSearch(private val tree: ProjectTree) {
         return low
     }
 
-    /**
-     * Текст файла или null, если это не текст.
-     *
-     * Двоичные файлы отсеиваются по нулевому байту в начале — тем же признаком,
-     * которым пользуется git. Способ грубый: UTF-16 без BOM он посчитает
-     * двоичным. Для проекта с кодом это правильный выбор, а не недосмотр:
-     * лучше пропустить редкий файл, чем вывалить в список совпадений мусор
-     * из середины картинки.
-     */
-    private fun readText(file: File): String? {
-        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
-        val head = minOf(bytes.size, BINARY_SNIFF_BYTES)
-        for (index in 0 until head) if (bytes[index] == 0.toByte()) return null
-        return runCatching { String(bytes, Charsets.UTF_8) }.getOrNull()
-    }
-
     companion object {
         /** Потолок совпадений. Больше человек всё равно не просматривает. */
         const val DEFAULT_LIMIT = 500
@@ -171,7 +127,6 @@ class ProjectSearch(private val tree: ProjectTree) {
         /** Файлы больше этого не читаются: ADR-005 и без того ставит потолок в 10 МБ. */
         const val MAX_FILE_BYTES = 2L * 1024 * 1024
 
-        private const val BINARY_SNIFF_BYTES = 8000
         private const val PREVIEW_LIMIT = 200
     }
 }

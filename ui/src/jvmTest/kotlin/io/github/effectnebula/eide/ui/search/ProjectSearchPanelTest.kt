@@ -2,11 +2,15 @@ package io.github.effectnebula.eide.ui.search
 
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.isEditable
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import io.github.effectnebula.eide.core.project.ProjectMatch
 import io.github.effectnebula.eide.core.project.ProjectTree
+import io.github.effectnebula.eide.core.project.Workspace
+import io.github.effectnebula.eide.platform.GraphemeBreaker
 import kotlinx.coroutines.Dispatchers
 import java.nio.file.Files
 import java.io.File
@@ -30,6 +34,11 @@ import kotlin.test.assertEquals
  */
 @OptIn(ExperimentalTestApi::class)
 class ProjectSearchPanelTest {
+
+    private object Breaker : GraphemeBreaker {
+        override fun next(line: CharSequence, from: Int): Int = minOf(from + 1, line.length)
+        override fun previous(line: CharSequence, from: Int): Int = maxOf(from - 1, 0)
+    }
 
     private fun project(vararg files: Pair<String, String>): ProjectTree {
         val root = Files.createTempDirectory("eide-panel").toFile().apply { deleteOnExit() }
@@ -158,4 +167,209 @@ class ProjectSearchPanelTest {
         onNodeWithText("иголка малая").assertExists()
         onNodeWithText("Иголка большая").assertDoesNotExist()
     }
+
+    // --- замена ----------------------------------------------------------------
+
+    @Test
+    fun `replace writes the files and says how many`() = runComposeUiTest {
+        val tree = project(
+            "first.py" to "иголка\n",
+            "nested/second.py" to "иголка и ещё иголка\n",
+        )
+        val workspace = Workspace(tree, Breaker)
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+                workspace = workspace,
+            )
+        }
+        awaitSearch()
+
+        onNodeWithText("замена").performClick()
+        waitForIdle()
+        onNodeWithText("заменить всё (3)").performClick()
+        waitForIdle()
+        onNodeWithText("точно? (3)").performClick()
+        awaitSearch()
+
+        onNodeWithText("заменено 3 в 2 файлах").assertExists()
+        assertEquals("\n", File(tree.root, "first.py").readText(), "замена на пустое — тоже замена")
+    }
+
+    @Test
+    fun `replace does not lose unsaved edits in an open buffer`() = runComposeUiTest {
+        // Ровно так это ломается в редакторах, которые правят диск напрямую:
+        // человек набрал текст, не сохранил, нажал «заменить всё» — и правок нет.
+        val tree = project("main.py" to "иголка\n")
+        val workspace = Workspace(tree, Breaker)
+        val open = workspace.open(File(tree.root, "main.py"))
+        open.state.type("не сохранено\n")
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+                workspace = workspace,
+            )
+        }
+        awaitSearch()
+
+        onNodeWithText("замена").performClick()
+        waitForIdle()
+        onNodeWithText("заменить всё (1)").performClick()
+        waitForIdle()
+        onNodeWithText("точно? (1)").performClick()
+        awaitSearch()
+
+        val text = open.state.text.let { it.substring(0, it.length) }
+        assertEquals("не сохранено\n\n", text)
+        assertEquals(text, File(tree.root, "main.py").readText())
+    }
+
+    @Test
+    fun `without a workspace there is no replace at all`() = runComposeUiTest {
+        // Замена, не знающая про открытые файлы, затирает несохранённое. Пусть
+        // лучше кнопки не будет вовсе, чем будет опасная.
+        val tree = project("main.py" to "иголка\n")
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+            )
+        }
+        awaitSearch()
+
+        onNodeWithText("замена").assertDoesNotExist()
+    }
+
+
+    @Test
+    fun `the report counts what was replaced, not what the stale disk had`() = runComposeUiTest {
+        // Буфер убрал одно из двух совпадений и не сохранён. Если не записать
+        // буферы перед заменой, замена пройдёт по устаревшему диску, насчитает
+        // два, а буфер потом ляжет сверху с одним — и отчёт соврёт.
+        val tree = project("main.py" to "иголка\nиголка\n")
+        val workspace = Workspace(tree, Breaker)
+        val open = workspace.open(File(tree.root, "main.py"))
+        open.state.selectAll()
+        open.state.type("иголка\n")
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+                workspace = workspace,
+            )
+        }
+        awaitSearch()
+
+        onNodeWithText("замена").performClick()
+        waitForIdle()
+        onNodeWithText("заменить всё (2)").performClick()
+        waitForIdle()
+        onNodeWithText("точно? (2)").performClick()
+        awaitSearch()
+
+        onNodeWithText("заменено 1 в 1 файлах").assertExists()
+        assertEquals("\n", File(tree.root, "main.py").readText())
+    }
+
+    @Test
+    fun `the list is searched again after a replacement`() = runComposeUiTest {
+        // Список после замены показывает то, чего в файлах уже нет: ткнуть в
+        // такую строку — значит открыть файл на строке, где ничего не найдено.
+        val tree = project("main.py" to "иголка\n")
+        val workspace = Workspace(tree, Breaker)
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+                workspace = workspace,
+            )
+        }
+        awaitSearch()
+        onNodeWithText("main.py:1").assertExists()
+
+        onNodeWithText("замена").performClick()
+        waitForIdle()
+        onNodeWithText("заменить всё (1)").performClick()
+        waitForIdle()
+        onNodeWithText("точно? (1)").performClick()
+        awaitSearch()
+
+        onNodeWithText("main.py:1").assertDoesNotExist()
+    }
+
+
+    @Test
+    fun `one press does not replace anything`() = runComposeUiTest {
+        // Кнопка стоит вплотную к полю ввода, а замена по проекту необратима
+        // для закрытых файлов. Первое нажатие обязано только взвести.
+        val tree = project("main.py" to "иголка\n")
+        val workspace = Workspace(tree, Breaker)
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+                workspace = workspace,
+            )
+        }
+        awaitSearch()
+
+        onNodeWithText("замена").performClick()
+        waitForIdle()
+        onNodeWithText("заменить всё (1)").performClick()
+        awaitSearch()
+
+        assertEquals("иголка\n", File(tree.root, "main.py").readText())
+        onNodeWithText("точно? (1)").assertExists()
+    }
+
+    @Test
+    fun `editing the replacement disarms the button`() = runComposeUiTest {
+        // Взвели, потом передумали и дописали текст замены — второе нажатие
+        // не должно оказаться подтверждением прежнего намерения.
+        val tree = project("main.py" to "иголка\n")
+        val workspace = Workspace(tree, Breaker)
+
+        setContent {
+            ProjectSearchPanel(
+                tree = tree,
+                onOpen = {},
+                initialPattern = "иголка",
+                dispatcher = Dispatchers.Unconfined,
+                workspace = workspace,
+            )
+        }
+        awaitSearch()
+
+        onNodeWithText("замена").performClick()
+        waitForIdle()
+        onNodeWithText("заменить всё (1)").performClick()
+        waitForIdle()
+
+        onAllNodes(isEditable())[1].performTextInput("гвоздь")
+        waitForIdle()
+
+        onNodeWithText("заменить всё (1)").assertExists()
+        assertEquals("иголка\n", File(tree.root, "main.py").readText())
+    }
+
 }

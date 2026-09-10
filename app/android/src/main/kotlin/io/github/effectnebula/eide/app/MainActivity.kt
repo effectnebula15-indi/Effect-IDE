@@ -329,6 +329,7 @@ private fun WorkbenchScreen(
     if (panel == Screen.Search) {
         ProjectSearchPanel(
             tree = workspace.tree,
+            workspace = workspace,
             onOpen = { match ->
                 saveNow()
                 // Расчёт позиции — в `Workspace.openAt`, тот же, что на десктопе.

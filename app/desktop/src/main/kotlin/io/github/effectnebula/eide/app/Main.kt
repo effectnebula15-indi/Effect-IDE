@@ -233,6 +233,7 @@ private fun DesktopShell() {
             ProjectSearchPanel(
                 tree = workspace.tree,
                 initialPattern = Debug.projectSearch.orEmpty(),
+                workspace = workspace,
                 onOpen = { match ->
                     workspace.saveModified()
                     // Арифметика позиции — в `Workspace.openAt`: она же нужна на
