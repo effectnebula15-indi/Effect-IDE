@@ -1,8 +1,8 @@
 package io.github.effectnebula.eide.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -14,14 +14,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import io.github.effectnebula.eide.runner.android.CanvasArea
+import io.github.effectnebula.eide.ui.canvas.ContentPoint
+import io.github.effectnebula.eide.ui.canvas.FitResult
 import io.github.effectnebula.eide.ui.canvas.fitInside
-import kotlin.math.abs
+import io.github.effectnebula.eide.ui.canvas.pointInContent
 
 /**
  * Вывод графики программы пользователя.
@@ -59,16 +63,41 @@ fun CanvasScreen(area: CanvasArea, onBack: () -> Unit, modifier: Modifier = Modi
         }
     }
 
+    /*
+     * Возврат к коду — системной кнопкой «назад», а не свайпом по холсту.
+     *
+     * В плане было записано «свайп возвращает к коду», и пока графика была
+     * картинкой, свайп по холсту работал. С появлением ввода он перестал:
+     * программа, которой нужен палец, и жест возврата не могут делить один и
+     * тот же экран — горизонтальное движение либо рисует, либо уводит, третьего
+     * нет. Системный жест «назад» на современном Android это тоже свайп, только
+     * от края, и он не отнимает у программы ни пикселя.
+     */
+    BackHandler(onBack = onBack)
+
+    // Куда вписан кадр — знает отрисовка, а нужно это и вводу.
+    val placement = remember(area) { FramePlacement(area.width, area.height) }
+
     Box(
         modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(onBack) {
-                var travelled = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { travelled = 0f },
-                    onDragEnd = { if (abs(travelled) > SWIPE_BACK_PX) onBack() },
-                ) { _, delta -> travelled += delta }
+            .pointerInput(area) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val type = when (event.type) {
+                            PointerEventType.Press -> EVENT_POINTER_DOWN
+                            PointerEventType.Move -> EVENT_POINTER_MOVE
+                            PointerEventType.Release -> EVENT_POINTER_UP
+                            else -> continue
+                        }
+                        for ((index, change) in event.changes.withIndex()) {
+                            val point = placement.contentPoint(change.position) ?: continue
+                            area.postEvent(type, pointer = index, x = point.x, y = point.y)
+                        }
+                    }
+                }
             }
     ) {
         Canvas(Modifier.fillMaxSize()) {
@@ -77,6 +106,7 @@ fun CanvasScreen(area: CanvasArea, onBack: () -> Unit, modifier: Modifier = Modi
             frame
 
             val fit = fitInside(area.width, area.height, size.width, size.height)
+            placement.fit = fit
             drawImage(
                 image = image,
                 srcOffset = IntOffset.Zero,
@@ -91,4 +121,23 @@ fun CanvasScreen(area: CanvasArea, onBack: () -> Unit, modifier: Modifier = Modi
     }
 }
 
-private const val SWIPE_BACK_PX = 120f
+/**
+ * Где на экране лежит кадр — общее знание отрисовки и ввода.
+ *
+ * Обычный объект, а не состояние Compose: значение меняется каждый кадр, и
+ * подписка означала бы пересборку шестьдесят раз в секунду ради числа, нужного
+ * только обработчику пальца.
+ */
+private class FramePlacement(val contentWidth: Int, val contentHeight: Int) {
+    var fit: FitResult? = null
+
+    fun contentPoint(position: Offset): ContentPoint? {
+        val current = fit ?: return null
+        return pointInContent(current, contentWidth, contentHeight, position.x, position.y)
+    }
+}
+
+/* Виды событий: те же числа, что EC_EVENT_* в eide_canvas.h. */
+private const val EVENT_POINTER_DOWN = 1
+private const val EVENT_POINTER_MOVE = 2
+private const val EVENT_POINTER_UP = 3

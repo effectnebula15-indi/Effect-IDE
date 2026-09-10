@@ -78,3 +78,42 @@ Java_io_github_effectnebula_eide_runner_android_CanvasArea_nativeReadFrame(
     AndroidBitmap_unlockPixels(env, bitmap);
     return frame;
 }
+
+/*
+ * Кладёт событие ввода в кольцо. Зовётся из процесса IDE, а не раннера:
+ * события порождает интерфейс, читает их программа пользователя.
+ */
+JNIEXPORT jboolean JNICALL
+Java_io_github_effectnebula_eide_runner_android_CanvasArea_nativePostEvent(
+        JNIEnv *env, jclass clazz, jobject area, jint type, jint pointer,
+        jint x, jint y, jint key, jint modifiers, jlong time_ms) {
+    UNUSED(clazz);
+
+    void *address = (*env)->GetDirectBufferAddress(env, area);
+    jlong capacity = (*env)->GetDirectBufferCapacity(env, area);
+    if (address == NULL || capacity <= 0) return JNI_FALSE;
+
+    ec_event event;
+    memset(&event, 0, sizeof(event));
+    event.type = (uint32_t)type;
+    event.pointer = (int32_t)pointer;
+    event.x = (int32_t)x;
+    event.y = (int32_t)y;
+    event.key = (int32_t)key;
+    event.modifiers = (uint32_t)modifiers;
+    event.time_ms = (uint64_t)time_ms;
+
+    return ec_post_event(address, (size_t)capacity, &event) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL
+Java_io_github_effectnebula_eide_runner_android_CanvasArea_nativeDroppedEvents(
+        JNIEnv *env, jclass clazz, jobject area) {
+    UNUSED(clazz);
+
+    void *address = (*env)->GetDirectBufferAddress(env, area);
+    jlong capacity = (*env)->GetDirectBufferCapacity(env, area);
+    if (address == NULL || capacity <= 0) return 0;
+
+    return (jlong)ec_dropped_events(address, (size_t)capacity);
+}

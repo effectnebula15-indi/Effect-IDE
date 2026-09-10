@@ -51,6 +51,27 @@ class CanvasArea private constructor(
      */
     fun latestFrame(): Long = nativeLatestFrame(buffer)
 
+    /**
+     * Кладёт событие ввода. Зовёт интерфейс, читает программа пользователя.
+     *
+     * Координаты — уже канвы, не экрана: пересчёт делает тот, кто знает, куда
+     * и с каким масштабом вписан кадр.
+     *
+     * Возвращает false при переполнении кольца — событие потеряно.
+     */
+    fun postEvent(
+        type: Int,
+        pointer: Int,
+        x: Int,
+        y: Int,
+        key: Int = 0,
+        modifiers: Int = 0,
+        timeMillis: Long = System.currentTimeMillis(),
+    ): Boolean = nativePostEvent(buffer, type, pointer, x, y, key, modifiers, timeMillis)
+
+    /** Сколько событий потеряно из-за переполнения. */
+    fun droppedEvents(): Long = nativeDroppedEvents(buffer)
+
     /** Bitmap нужного формата и размера. */
     fun createBitmap(): Bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
@@ -109,5 +130,18 @@ class CanvasArea private constructor(
         @JvmStatic private external fun nativeAddressOf(area: ByteBuffer): Long
         @JvmStatic private external fun nativeLatestFrame(area: ByteBuffer): Long
         @JvmStatic private external fun nativeReadFrame(area: ByteBuffer, bitmap: Bitmap, since: Long): Long
+
+        @JvmStatic private external fun nativePostEvent(
+            area: ByteBuffer,
+            type: Int,
+            pointer: Int,
+            x: Int,
+            y: Int,
+            key: Int,
+            modifiers: Int,
+            timeMillis: Long,
+        ): Boolean
+
+        @JvmStatic private external fun nativeDroppedEvents(area: ByteBuffer): Long
     }
 }
