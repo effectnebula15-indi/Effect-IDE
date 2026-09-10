@@ -34,6 +34,14 @@ class LocalPythonBackendTest {
         /** Взводится на первом же куске вывода — по нему видно, когда он пришёл. */
         val firstOutput = CountDownLatch(1)
 
+        /**
+         * Всё пришедшее в порядке прихода, с пометкой откуда.
+         *
+         * Раздельные `out` и `err` про порядок между собой не говорят ничего,
+         * а человек в панели вывода видит именно общий порядок.
+         */
+        val arrived = mutableListOf<Pair<String, String>>()
+
         private val done = CountDownLatch(1)
 
         override fun onStarted(pid: Int) {
@@ -42,11 +50,13 @@ class LocalPythonBackendTest {
 
         @Synchronized override fun onStdout(chunk: String) {
             out.append(chunk)
+            arrived += "out" to chunk
             firstOutput.countDown()
         }
 
         @Synchronized override fun onStderr(chunk: String) {
             err.append(chunk)
+            arrived += "err" to chunk
         }
 
         override fun onExit(code: Int) {
@@ -107,6 +117,32 @@ class LocalPythonBackendTest {
 
         assertEquals("в вывод\n", recorder.out.toString())
         assertEquals("в ошибки\n", recorder.err.toString())
+    }
+
+    @Test
+    fun `output keeps the order the program produced it in`() {
+        // Человек в панели видит один поток текста. Трассировка, показанная
+        // раньше строк, напечатанных до неё, — не мелочь: начинающий по такому
+        // выводу решит, что программа упала в другом месте.
+        //
+        // Паузы по полсекунды нарочно: без них порядок между двумя трубами
+        // не определён в принципе, и тест проверял бы удачу.
+        val recorder = run(
+            """
+            import sys, time
+            print('первая в вывод')
+            time.sleep(0.5)
+            print('вторая в ошибки', file=sys.stderr)
+            time.sleep(0.5)
+            print('третья в вывод')
+            """.trimIndent()
+        )
+
+        val order = recorder.arrived.map { (source, chunk) -> source to chunk.trim() }
+        assertEquals(
+            listOf("out" to "первая в вывод", "err" to "вторая в ошибки", "out" to "третья в вывод"),
+            order,
+        )
     }
 
     @Test

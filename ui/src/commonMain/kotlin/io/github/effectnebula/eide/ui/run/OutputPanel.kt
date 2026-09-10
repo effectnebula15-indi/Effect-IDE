@@ -9,7 +9,11 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -27,13 +31,39 @@ import io.github.effectnebula.eide.ui.theme.Eide
 fun OutputPanel(text: String, modifier: Modifier = Modifier) {
     val scroll = rememberScrollState()
 
-    // Порог, а не точное равенство: пока идёт прокрутка, значение отстаёт от
-    // максимума на несколько пикселей, и строгая проверка не срабатывает почти
-    // никогда.
-    val wasAtBottom = remember(text) { scroll.value >= scroll.maxValue - STICK_THRESHOLD_PX }
+    // Следим за концом, пока человек сам не отлистал назад.
+    //
+    // Прежняя редакция спрашивала «был ли он внизу» прямо в момент прихода
+    // текста — и не работала никогда. До первой раскладки `maxValue` равен
+    // Int.MAX_VALUE, сравнение с ним даёт «не внизу», а вычислялось это один раз
+    // на каждое значение текста. Панель так и оставалась на первой строке,
+    // сколько бы программа ни писала. Ни один тест этого не показал: в стенде
+    // Compose начальный `maxValue` равен нулю, и там всё «работало».
+    var follow by remember { mutableStateOf(true) }
 
-    LaunchedEffect(text) {
-        if (wasAtBottom) scroll.scrollTo(scroll.maxValue)
+    // Решение принимается только по окончании настоящей прокрутки: важен переход
+    // «крутили → перестали», а не само состояние. Состояние в первый раз
+    // спрашивается до раскладки, когда maxValue ещё Int.MAX_VALUE, и любой ответ
+    // по нему — «не внизу». Ровно на этом всё и ломалось дважды.
+    //
+    // Своя прокрутка тоже даёт этот переход и оставляет follow включённым: она
+    // заканчивается ровно в конце.
+    LaunchedEffect(scroll) {
+        var wasScrolling = false
+        snapshotFlow { scroll.isScrollInProgress }.collect { scrolling ->
+            // Порог, а не точное равенство: значение отстаёт от максимума на
+            // несколько пикселей, и строгая проверка не срабатывает почти никогда.
+            if (wasScrolling && !scrolling) {
+                follow = scroll.value >= scroll.maxValue - STICK_THRESHOLD_PX
+            }
+            wasScrolling = scrolling
+        }
+    }
+
+    // Ключом идёт и maxValue: в момент, когда меняется текст, разметки нового
+    // текста ещё нет, и maxValue отвечает про старую.
+    LaunchedEffect(text, scroll.maxValue) {
+        if (follow) scroll.scrollTo(scroll.maxValue)
     }
 
     Column(
