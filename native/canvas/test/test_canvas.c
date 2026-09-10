@@ -401,6 +401,139 @@ static void test_no_torn_frames_under_contention(void) {
     free(state.area);
 }
 
+/* --- наложение картинок -------------------------------------------------- */
+
+/** Пиксель кадра как его увидит читатель. */
+static uint32_t frame_pixel(void *area, size_t size, int32_t x, int32_t y) {
+    static uint32_t pixels[PIXELS];
+    uint64_t frame = ec_read_frame(area, size, pixels, sizeof(pixels), 0);
+    assert(frame != 0);
+    return pixels[(size_t)y * W + (size_t)x];
+}
+
+static void test_blit_copies_opaque_pixels(void) {
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+
+    uint8_t sprite[2 * 2 * 4];
+    for (int i = 0; i < 4; i++) {
+        sprite[i * 4 + 0] = 0x10;
+        sprite[i * 4 + 1] = 0x20;
+        sprite[i * 4 + 2] = 0x30;
+        sprite[i * 4 + 3] = 0xFF;
+    }
+
+    ec_begin_frame(ctx);
+    ec_clear(ctx, 0x000000FF);
+    ec_blit(ctx, sprite, 2, 2, 5, 6);
+    ec_end_frame(ctx);
+
+    assert(frame_pixel(area, size, 5, 6) == ec_pack_rgba(0x102030FF));
+    assert(frame_pixel(area, size, 6, 7) == ec_pack_rgba(0x102030FF));
+    assert(frame_pixel(area, size, 7, 6) == ec_pack_rgba(0x000000FF));
+
+    ec_close(ctx);
+    free(area);
+}
+
+static void test_blit_respects_transparency(void) {
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+
+    uint8_t sprite[2 * 4];
+    /* Слева прозрачный, справа наполовину белый. */
+    sprite[0] = 0xFF; sprite[1] = 0xFF; sprite[2] = 0xFF; sprite[3] = 0x00;
+    sprite[4] = 0xFF; sprite[5] = 0xFF; sprite[6] = 0xFF; sprite[7] = 0x80;
+
+    ec_begin_frame(ctx);
+    ec_clear(ctx, 0x000000FF);
+    ec_blit(ctx, sprite, 2, 1, 0, 0);
+    ec_end_frame(ctx);
+
+    /* Прозрачный не тронул фон. */
+    assert(frame_pixel(area, size, 0, 0) == ec_pack_rgba(0x000000FF));
+
+    /* Полупрозрачный белый по чёрному: 255*128/255 с округлением — 128. */
+    assert(frame_pixel(area, size, 1, 0) == ec_pack_rgba(0x808080FF));
+
+    ec_close(ctx);
+    free(area);
+}
+
+static void test_blending_rounds_to_the_nearest(void) {
+    /*
+     * Первая редакция этой проверки накладывала белое на чёрное десять раз и
+     * ждала, что картинка не потускнеет. Она проходила и без округления:
+     * 255*255/255 делится нацело, и ошибки там нет вовсе. Комментарий рядом
+     * утверждал обратное — арифметика была придумана, а не посчитана.
+     *
+     * Округление видно там, где деление не точное: 200 при alpha=130 по чёрному
+     * даёт 101 с отбрасыванием и 102 с округлением.
+     */
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+
+    uint8_t sprite[4] = {200, 200, 200, 130};
+
+    ec_begin_frame(ctx);
+    ec_clear(ctx, 0x000000FF);
+    ec_blit(ctx, sprite, 1, 1, 3, 3);
+    ec_end_frame(ctx);
+
+    assert(frame_pixel(area, size, 3, 3) == ec_pack_rgba(0x666666FF));
+
+    ec_close(ctx);
+    free(area);
+}
+
+static void test_blit_clips_at_every_edge(void) {
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+
+    /*
+     * Каждый пиксель свой: одноцветная картинка прошла бы и при неверном
+     * смещении в источнике — именно так первая редакция и пропускала мутацию,
+     * съедавшую обрезку слева.
+     */
+    uint8_t sprite[8 * 8 * 4];
+    for (int32_t row = 0; row < 8; row++) {
+        for (int32_t col = 0; col < 8; col++) {
+            uint8_t *pixel = sprite + ((size_t)row * 8 + (size_t)col) * 4;
+            pixel[0] = (uint8_t)(col * 16 + 8);
+            pixel[1] = (uint8_t)(row * 16 + 8);
+            pixel[2] = 0;
+            pixel[3] = 0xFF;
+        }
+    }
+
+    ec_begin_frame(ctx);
+    ec_clear(ctx, 0x000000FF);
+    /* Со всех четырёх сторон и целиком снаружи: падать не должно нигде. */
+    ec_blit(ctx, sprite, 8, 8, -4, -4);
+    ec_blit(ctx, sprite, 8, 8, W - 4, H - 4);
+    ec_blit(ctx, sprite, 8, 8, -100, 10);
+    ec_blit(ctx, sprite, 8, 8, 10, -100);
+    ec_blit(ctx, sprite, 8, 8, W + 100, H + 100);
+    ec_end_frame(ctx);
+
+    /*
+     * В левом верхнем углу экрана должен оказаться пиксель (4,4) картинки,
+     * а не (0,0): четыре столбца и четыре строки ушли за край.
+     */
+    assert(frame_pixel(area, size, 0, 0) == ec_pack_rgba(0x484800FF));
+    assert(frame_pixel(area, size, 1, 0) == ec_pack_rgba(0x584800FF));
+    /* Правый нижний: видна левая верхняя четверть картинки. */
+    assert(frame_pixel(area, size, W - 4, H - 4) == ec_pack_rgba(0x080800FF));
+    assert(frame_pixel(area, size, W / 2, H / 2) == ec_pack_rgba(0x000000FF));
+
+    ec_close(ctx);
+    free(area);
+}
+
 /* --- события ввода ------------------------------------------------------ */
 
 static ec_event pointer_event(uint32_t type, int32_t x, int32_t y) {
@@ -591,6 +724,10 @@ int main(void) {
     test_rect_clipping();
     test_clipping_protects_the_end_of_the_area();
     test_no_torn_frames_under_contention();
+    test_blit_copies_opaque_pixels();
+    test_blit_respects_transparency();
+    test_blending_rounds_to_the_nearest();
+    test_blit_clips_at_every_edge();
     test_events_arrive_in_order();
     test_a_full_ring_drops_the_new_event();
     test_the_ring_wraps_around();

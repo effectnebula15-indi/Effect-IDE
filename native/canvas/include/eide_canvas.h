@@ -141,6 +141,19 @@ void ec_begin_frame(ec_ctx *ctx);
 void ec_clear(ec_ctx *ctx, uint32_t rgba);
 void ec_fill_rect(ec_ctx *ctx, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgba);
 
+/**
+ * Накладывает картинку RGBA с учётом прозрачности.
+ *
+ * [rgba] — [src_width] на [src_height] пикселей, по четыре байта, тот же порядок
+ * каналов, что и у кадра. Уехавшее за край обрезается.
+ *
+ * Смешивание, а не копирование: спрайт без прозрачности — это прямоугольник,
+ * а он уже есть.
+ */
+void ec_blit(
+    ec_ctx *ctx, const uint8_t *rgba, int32_t src_width, int32_t src_height,
+    int32_t dx, int32_t dy);
+
 /** Публикует нарисованное. До этого вызова читатель кадра не увидит. */
 void ec_end_frame(ec_ctx *ctx);
 

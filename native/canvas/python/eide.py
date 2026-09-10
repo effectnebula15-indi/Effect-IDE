@@ -86,6 +86,12 @@ class _Library:
         self._lib.ec_poll_event.argtypes = [ctypes.c_void_p, ctypes.POINTER(_CEvent)]
         self._lib.ec_poll_event.restype = ctypes.c_int
 
+        self._lib.ec_blit.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p,
+            ctypes.c_int32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
+        ]
+        self._lib.ec_blit.restype = None
+
     def __getattr__(self, name):
         return getattr(self._lib, name)
 
@@ -203,6 +209,25 @@ class Canvas:
             if event is None:
                 return
             yield event
+
+    def blit(self, pixels, width, height, x, y):
+        """Накладывает картинку RGBA с учётом прозрачности.
+
+        [pixels] — bytes длиной width * height * 4: по четыре байта на пиксель,
+        R, G, B, A. Уехавшее за край обрезается, а не падает.
+
+        Проверка длины здесь, а не в C: перепутанные местами width и height дают
+        чтение за концом буфера, и ловить это санитайзером в чужой программе
+        поздно.
+        """
+        expected = int(width) * int(height) * 4
+        if len(pixels) < expected:
+            raise ValueError(
+                "картинка %dx%d требует %d байт, передано %d"
+                % (width, height, expected, len(pixels))
+            )
+        self._begin()
+        self._library.ec_blit(self._ctx, bytes(pixels), int(width), int(height), int(x), int(y))
 
     def present(self):
         """Показывает нарисованное. До этого вызова кадра не видно."""

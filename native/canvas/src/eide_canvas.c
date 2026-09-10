@@ -277,6 +277,62 @@ void ec_fill_rect(ec_ctx *ctx, int32_t x, int32_t y, int32_t w, int32_t h, uint3
     }
 }
 
+/*
+ * Наложение картинки с учётом прозрачности.
+ *
+ * Смешивание, а не копирование: спрайт без прозрачности — это прямоугольник,
+ * а прямоугольник уже есть. Цена названа прямо: непрозрачная картинка идёт тем
+ * же путём, что и полупрозрачная, то есть по четыре умножения на пиксель вместо
+ * memcpy. Быстрый путь для alpha=255 не сделан намеренно: он ускоряет заведомо
+ * редкий случай и добавляет ветку, которую надо отдельно проверять.
+ */
+void ec_blit(
+        ec_ctx *ctx, const uint8_t *rgba, int32_t src_width, int32_t src_height,
+        int32_t dx, int32_t dy) {
+    if (ctx == NULL || rgba == NULL || src_width <= 0 || src_height <= 0) return;
+
+    int32_t width = ctx->header->width;
+    int32_t height = ctx->header->height;
+
+    /* Обрезка та же, что у прямоугольника: уехавшая картинка — обычное дело. */
+    int32_t x0 = dx < 0 ? 0 : dx;
+    int32_t y0 = dy < 0 ? 0 : dy;
+    int64_t x1 = (int64_t)dx + src_width;
+    int64_t y1 = (int64_t)dy + src_height;
+    if (x1 > width) x1 = width;
+    if (y1 > height) y1 = height;
+    if (x0 >= x1 || y0 >= y1) return;
+
+    unsigned char *pixels = slot_pixels(ctx, ctx->writing);
+
+    for (int32_t row = y0; row < (int32_t)y1; row++) {
+        const uint8_t *source = rgba + ((size_t)(row - dy) * (size_t)src_width + (size_t)(x0 - dx)) * 4u;
+        unsigned char *target = pixels + ((size_t)row * (size_t)width + (size_t)x0) * 4u;
+
+        for (int32_t col = x0; col < (int32_t)x1; col++) {
+            uint32_t alpha = source[3];
+            if (alpha == 0) {
+                source += 4;
+                target += 4;
+                continue;
+            }
+            /*
+             * Округление к ближайшему, а не отбрасывание: без него белое поверх
+             * чёрного при alpha=255 даёт 254, и картинка едва заметно темнеет
+             * с каждым наложением.
+             */
+            for (int channel = 0; channel < 3; channel++) {
+                uint32_t src = source[channel];
+                uint32_t dst = target[channel];
+                target[channel] = (unsigned char)((src * alpha + dst * (255u - alpha) + 127u) / 255u);
+            }
+            target[3] = 255u;
+            source += 4;
+            target += 4;
+        }
+    }
+}
+
 uint64_t ec_latest_frame(void *area, size_t size) {
     ec_area_header *header = validate(area, size);
     if (header == NULL) return 0;

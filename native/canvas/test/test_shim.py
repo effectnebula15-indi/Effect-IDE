@@ -139,6 +139,34 @@ def main():
     # грубая ошибка — вроде сна на секунду вместо шестнадцати миллисекунд.
     assert elapsed < 5 / 60 * 10, "ограничитель спит слишком долго: %.4f с" % elapsed
 
+    # --- наложение картинок --------------------------------------------------
+    sprite = bytearray()
+    for row in range(2):
+        for col in range(2):
+            sprite += bytes((10 + col, 20 + row, 30, 255))
+    canvas.clear(0x000000FF)
+    canvas.blit(bytes(sprite), 2, 2, 3, 4)
+    canvas.present()
+    frame, raw = read_frame(lib, area, size, since=2)
+    assert frame == 3
+
+    # Имя не `pixel`: оно уже занято выше в этой же функции, и вложенное
+    # определение сделало бы его локальным на всю функцию целиком.
+    def pixel_at(x, y):
+        offset = (y * CANVAS_W + x) * 4
+        return tuple(raw[offset:offset + 4])
+
+    assert pixel_at(3, 4) == (10, 20, 30, 255), "картинка легла не туда: %r" % (pixel_at(3, 4),)
+    assert pixel_at(4, 5) == (11, 21, 30, 255), "строки картинки перепутаны: %r" % (pixel_at(4, 5),)
+    assert pixel_at(5, 4) == (0, 0, 0, 255), "картинка размазалась"
+
+    # Слишком короткий буфер обязан отвергаться здесь, а не читаться за концом.
+    try:
+        canvas.blit(b"\x00" * 4, 2, 2, 0, 0)
+        raise AssertionError("короткая картинка принята")
+    except ValueError:
+        pass
+
     # --- события ввода -------------------------------------------------------
     #
     # Структура события описана в двух местах: в C и в ctypes. Расхождения не
