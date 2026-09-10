@@ -70,7 +70,17 @@ static void test_colour_reaches_the_reader_in_the_right_order(void) {
 static void test_area_size(void) {
     assert(ec_area_size(0, 10) == 0);
     assert(ec_area_size(10, 0) == 0);
-    assert(ec_area_size(W, H) == 256 + 3 * (size_t)W * H * 4);
+
+    /*
+     * Заголовок, три слота пикселей и кольцо событий за ними, выровненное на
+     * кэш-линию. Размер кольца из заголовка сюда не видён, поэтому проверяется
+     * то, что проверить можно: пиксели на месте, кольцо непустое, выравнивание
+     * соблюдено. Сумма целиком повторяла бы реализацию, а не проверяла её.
+     */
+    size_t pixels_end = 256 + 3 * (size_t)W * H * 4;
+    size_t total = ec_area_size(W, H);
+    assert(total > pixels_end);
+    assert((total - ((pixels_end + 63) & ~(size_t)63)) > sizeof(ec_event) * EC_EVENT_CAPACITY);
 }
 
 static void test_too_small_area_is_rejected(void) {
@@ -391,6 +401,181 @@ static void test_no_torn_frames_under_contention(void) {
     free(state.area);
 }
 
+/* --- события ввода ------------------------------------------------------ */
+
+static ec_event pointer_event(uint32_t type, int32_t x, int32_t y) {
+    ec_event event;
+    memset(&event, 0, sizeof(event));
+    event.type = type;
+    event.x = x;
+    event.y = y;
+    return event;
+}
+
+static void test_events_arrive_in_order(void) {
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+    assert(ctx != NULL);
+
+    for (int32_t i = 0; i < 5; i++) {
+        ec_event event = pointer_event(EC_EVENT_POINTER_MOVE, i, i * 2);
+        assert(ec_post_event(area, size, &event) == 1);
+    }
+
+    for (int32_t i = 0; i < 5; i++) {
+        ec_event got;
+        assert(ec_poll_event(ctx, &got) == 1);
+        assert(got.type == EC_EVENT_POINTER_MOVE);
+        assert(got.x == i);
+        assert(got.y == i * 2);
+    }
+
+    ec_event empty;
+    assert(ec_poll_event(ctx, &empty) == 0);
+
+    ec_close(ctx);
+    free(area);
+}
+
+static void test_a_full_ring_drops_the_new_event(void) {
+    /*
+     * Терять надо новое, а не старое: выброшенное «нажали» оставит программу
+     * с «отпустили» без начала, и палец залипнет навсегда.
+     */
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+    assert(ctx != NULL);
+
+    for (uint32_t i = 0; i < EC_EVENT_CAPACITY; i++) {
+        ec_event event = pointer_event(EC_EVENT_POINTER_MOVE, (int32_t)i, 0);
+        assert(ec_post_event(area, size, &event) == 1);
+    }
+
+    ec_event extra = pointer_event(EC_EVENT_POINTER_UP, 999, 0);
+    assert(ec_post_event(area, size, &extra) == 0);
+    assert(ec_dropped_events(area, size) == 1);
+
+    /* Первое событие всё ещё на месте — выбросили именно новое. */
+    ec_event got;
+    assert(ec_poll_event(ctx, &got) == 1);
+    assert(got.x == 0);
+
+    ec_close(ctx);
+    free(area);
+}
+
+static void test_the_ring_wraps_around(void) {
+    /* Индекс берётся по маске и растёт без границ: обход кольца обязан работать. */
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *ctx = ec_open_writer(area, size);
+    assert(ctx != NULL);
+
+    for (int32_t round = 0; round < 10; round++) {
+        for (uint32_t i = 0; i < EC_EVENT_CAPACITY; i++) {
+            ec_event event = pointer_event(EC_EVENT_POINTER_MOVE, round * 1000 + (int32_t)i, 0);
+            assert(ec_post_event(area, size, &event) == 1);
+        }
+        for (uint32_t i = 0; i < EC_EVENT_CAPACITY; i++) {
+            ec_event got;
+            assert(ec_poll_event(ctx, &got) == 1);
+            assert(got.x == round * 1000 + (int32_t)i);
+        }
+    }
+
+    ec_close(ctx);
+    free(area);
+}
+
+static void test_a_fresh_area_has_no_events(void) {
+    /*
+     * Область переиспользуется между запусками: на Android её создают один раз
+     * на приложение. События прошлой программы новой доставаться не должны.
+     */
+    size_t size;
+    void *area = make_area(&size);
+    ec_ctx *first = ec_open_writer(area, size);
+    ec_event event = pointer_event(EC_EVENT_POINTER_DOWN, 7, 7);
+    assert(ec_post_event(area, size, &event) == 1);
+    ec_close(first);
+
+    assert(ec_init_area(area, size, W, H));
+
+    ec_ctx *second = ec_open_writer(area, size);
+    ec_event got;
+    assert(ec_poll_event(second, &got) == 0);
+    assert(ec_dropped_events(area, size) == 0);
+
+    ec_close(second);
+    free(area);
+}
+
+typedef struct {
+    void *area;
+    size_t size;
+    ec_ctx *reader;
+    uint32_t to_send;
+    _Atomic uint64_t received;
+    _Atomic uint64_t out_of_order;
+} input_race_state;
+
+static void *input_producer(void *argument) {
+    input_race_state *state = (input_race_state *)argument;
+    uint32_t sent = 0;
+    while (sent < state->to_send) {
+        ec_event event = pointer_event(EC_EVENT_POINTER_MOVE, (int32_t)sent, 0);
+        if (ec_post_event(state->area, state->size, &event)) sent++;
+    }
+    return NULL;
+}
+
+static void *input_consumer(void *argument) {
+    input_race_state *state = (input_race_state *)argument;
+    int32_t expected = 0;
+    ec_event got;
+    while ((uint32_t)expected < state->to_send) {
+        if (!ec_poll_event(state->reader, &got)) continue;
+        if (got.x != expected) atomic_fetch_add(&state->out_of_order, 1);
+        expected++;
+        atomic_fetch_add(&state->received, 1);
+    }
+    return NULL;
+}
+
+static void test_events_survive_two_threads(void) {
+    /*
+     * Кольцо, в отличие от кадров, обходится без исключений для TSan: писатель
+     * один, читатель один, и всё общение идёт через два атомарных индекса.
+     * Если этот тест начнёт ругаться под TSan — значит порядок памяти выбран
+     * неверно, а не «санитайзер не понимает приём».
+     */
+    input_race_state state;
+    state.area = make_area(&state.size);
+    state.reader = ec_open_writer(state.area, state.size);
+    assert(state.reader != NULL);
+    state.to_send = 5000;
+    atomic_init(&state.received, 0);
+    atomic_init(&state.out_of_order, 0);
+
+    pthread_t writer_thread, reader_thread;
+    assert(pthread_create(&writer_thread, NULL, input_producer, &state) == 0);
+    assert(pthread_create(&reader_thread, NULL, input_consumer, &state) == 0);
+    pthread_join(writer_thread, NULL);
+    pthread_join(reader_thread, NULL);
+
+    printf("  событий доставлено: %llu, не по порядку: %llu\n",
+           (unsigned long long)atomic_load(&state.received),
+           (unsigned long long)atomic_load(&state.out_of_order));
+
+    assert(atomic_load(&state.received) == state.to_send);
+    assert(atomic_load(&state.out_of_order) == 0);
+
+    ec_close(state.reader);
+    free(state.area);
+}
+
 int main(void) {
     test_colour_byte_order();
     test_colour_reaches_the_reader_in_the_right_order();
@@ -406,6 +591,11 @@ int main(void) {
     test_rect_clipping();
     test_clipping_protects_the_end_of_the_area();
     test_no_torn_frames_under_contention();
+    test_events_arrive_in_order();
+    test_a_full_ring_drops_the_new_event();
+    test_the_ring_wraps_around();
+    test_a_fresh_area_has_no_events();
+    test_events_survive_two_threads();
     printf("eide_canvas: все проверки прошли\n");
     return 0;
 }

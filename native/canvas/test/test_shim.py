@@ -139,6 +139,62 @@ def main():
     # грубая ошибка — вроде сна на секунду вместо шестнадцати миллисекунд.
     assert elapsed < 5 / 60 * 10, "ограничитель спит слишком долго: %.4f с" % elapsed
 
+    # --- события ввода -------------------------------------------------------
+    #
+    # Структура события описана в двух местах: в C и в ctypes. Расхождения не
+    # заметит ни компилятор, ни ctypes — программа просто начнёт получать
+    # координаты в поле времени. Поэтому каждое поле заполняется своим,
+    # непохожим на другие значением: перестановка любых двух полей после этого
+    # роняет проверку. С нулями она бы её не заметила — что и случилось
+    # с первой редакцией теста.
+    lib.ec_area_size.argtypes = [ctypes.c_int32, ctypes.c_int32]
+    lib.ec_area_size.restype = ctypes.c_size_t
+
+    # Раскладка списана с ec_event в eide_canvas.h, а НЕ взята из eide._CEvent.
+    # Первая редакция брала её из шима — и сравнивала шим сам с собой:
+    # перестановка полей в шиме проходила мимо, потому что проба переставлялась
+    # вместе с ним.
+    class CEventProbe(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.c_uint32),
+            ("pointer", ctypes.c_int32),
+            ("x", ctypes.c_int32),
+            ("y", ctypes.c_int32),
+            ("key", ctypes.c_int32),
+            ("modifiers", ctypes.c_uint32),
+            ("time_ms", ctypes.c_uint64),
+        ]
+
+    lib.ec_post_event.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(CEventProbe)]
+    lib.ec_post_event.restype = ctypes.c_int
+
+    assert canvas.poll_event() is None, "в свежем кольце нашлось событие"
+
+    for index in range(3):
+        event = CEventProbe()
+        event.type = eide.POINTER_MOVE
+        event.pointer = 1
+        event.x = 10 + index
+        event.y = 20 + index
+        event.key = 300 + index
+        event.modifiers = 4000 + index
+        event.time_ms = 50000 + index
+        assert lib.ec_post_event(area, size, ctypes.byref(event)) == 1
+
+    received = list(canvas.events())
+    assert len(received) == 3, "получено событий: %d" % len(received)
+    for index, got in enumerate(received):
+        assert got.type == eide.POINTER_MOVE
+        assert got.is_pointer
+        assert got.pointer == 1, "поля разъехались: %r" % got
+        assert got.x == 10 + index, "координата приехала не та: %r" % got
+        assert got.y == 20 + index
+        assert got.key == 300 + index, "поля разъехались: %r" % got
+        assert got.modifiers == 4000 + index, "поля разъехались: %r" % got
+        assert got.time_ms == 50000 + index, "поля разъехались: %r" % got
+
+    assert canvas.poll_event() is None, "очередь не опустела"
+
     canvas.close()
     print("eide.py: все проверки прошли")
 

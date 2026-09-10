@@ -10,6 +10,7 @@
  *   0    ec_area_header      — размеры и формат, пишутся один раз
  *   64   ec_slot_state[3]    — по кэш-линии на слот
  *   256  пиксели, EC_SLOTS x slot_bytes
+ *   ...  ec_input_ring       — кольцо событий ввода, сразу за пикселями
  *
  * Каждый слот защищён собственным счётчиком (seqlock): нечётное значение
  * означает «в слот пишут», чётное — «слот целый». Читатель берёт счётчик до и
@@ -30,7 +31,32 @@ typedef struct {
     uint32_t slots;
     uint32_t slot_bytes;
     uint32_t pixels_offset;
+    /* Смещение кольца событий: зависит от размера кадра, поэтому в заголовке. */
+    uint32_t input_offset;
+    uint32_t input_capacity;
 } ec_area_header;
+
+/*
+ * Кольцо событий ввода: пишет IDE, читает программа пользователя.
+ *
+ * Ни seqlock, ни исключений для TSan здесь нет и не нужно. Писатель один и
+ * умирать не собирается — умирает как раз читатель, и его смерть кольцу
+ * безразлична: оно просто переполнится, а следующий запуск начнёт с чистого
+ * заголовка.
+ *
+ * head двигает только писатель, tail — только читатель. Каждый читает чужой
+ * индекс с acquire и пишет свой с release: этого достаточно, чтобы событие
+ * стало видно целиком, а не наполовину.
+ */
+typedef struct {
+    _Atomic uint32_t head;
+    unsigned char head_padding[64 - sizeof(_Atomic uint32_t)];
+    _Atomic uint32_t tail;
+    unsigned char tail_padding[64 - sizeof(_Atomic uint32_t)];
+    _Atomic uint64_t dropped;
+    unsigned char dropped_padding[64 - sizeof(_Atomic uint64_t)];
+    ec_event events[EC_EVENT_CAPACITY];
+} ec_input_ring;
 
 typedef struct {
     _Atomic uint64_t seq;
@@ -110,9 +136,15 @@ static size_t slot_bytes_of(int32_t width, int32_t height) {
     return (size_t)width * (size_t)height * 4u;
 }
 
+/* Смещение кольца: сразу за пикселями, выровнено на кэш-линию. */
+static size_t input_offset_of(int32_t width, int32_t height) {
+    size_t after_pixels = EC_PIXELS_OFFSET + EC_SLOTS * slot_bytes_of(width, height);
+    return (after_pixels + 63u) & ~(size_t)63u;
+}
+
 size_t ec_area_size(int32_t width, int32_t height) {
     if (width <= 0 || height <= 0) return 0;
-    return EC_PIXELS_OFFSET + EC_SLOTS * slot_bytes_of(width, height);
+    return input_offset_of(width, height) + sizeof(ec_input_ring);
 }
 
 int ec_init_area(void *area, size_t size, int32_t width, int32_t height) {
@@ -129,6 +161,15 @@ int ec_init_area(void *area, size_t size, int32_t width, int32_t height) {
     header->slots = EC_SLOTS;
     header->slot_bytes = (uint32_t)slot_bytes_of(width, height);
     header->pixels_offset = EC_PIXELS_OFFSET;
+    header->input_offset = (uint32_t)input_offset_of(width, height);
+    header->input_capacity = EC_EVENT_CAPACITY;
+
+    /*
+     * Кольцо обнуляется явно: `memset` выше чистит только заголовок, а свежая
+     * разделяемая память нулевая не всегда — на Android область переиспользуется
+     * между запусками, и в ней остались бы события прошлой программы.
+     */
+    memset((unsigned char *)area + header->input_offset, 0, sizeof(ec_input_ring));
 
     /* Магия пишется последней: до неё область считается непригодной. */
     atomic_thread_fence(memory_order_release);
@@ -144,6 +185,7 @@ static ec_area_header *validate(void *area, size_t size) {
     if (header->magic != EC_MAGIC || header->version != EC_VERSION) return NULL;
     if (header->slots != EC_SLOTS || header->format != EC_FORMAT_RGBA8888) return NULL;
     if (header->pixels_offset != EC_PIXELS_OFFSET) return NULL;
+    if (header->input_capacity != EC_EVENT_CAPACITY) return NULL;
     if (header->width <= 0 || header->height <= 0) return NULL;
 
     size_t expected = slot_bytes_of(header->width, header->height);
@@ -300,4 +342,55 @@ uint64_t ec_read_frame(void *area, size_t size, void *dst, size_t dst_size, uint
     }
 
     return 0;
+}
+
+/* --- события ввода ------------------------------------------------------ */
+
+static ec_input_ring *ring_of(void *area, size_t size) {
+    ec_area_header *header = validate(area, size);
+    if (header == NULL) return NULL;
+    return (ec_input_ring *)((unsigned char *)area + header->input_offset);
+}
+
+int ec_post_event(void *area, size_t size, const ec_event *event) {
+    if (event == NULL) return 0;
+    ec_input_ring *ring = ring_of(area, size);
+    if (ring == NULL) return 0;
+
+    uint32_t head = atomic_load_explicit(&ring->head, memory_order_relaxed);
+    uint32_t tail = atomic_load_explicit(&ring->tail, memory_order_acquire);
+
+    /*
+     * Переполнение теряет новое событие, а не старое. Обратный выбор ломает
+     * пары: выброшенное «нажали» оставляет программу с «отпустили» без начала,
+     * и палец залипает навсегда.
+     */
+    if (head - tail >= EC_EVENT_CAPACITY) {
+        atomic_fetch_add_explicit(&ring->dropped, 1, memory_order_relaxed);
+        return 0;
+    }
+
+    ring->events[head & (EC_EVENT_CAPACITY - 1u)] = *event;
+    /* release: событие должно быть записано целиком до того, как станет видно. */
+    atomic_store_explicit(&ring->head, head + 1u, memory_order_release);
+    return 1;
+}
+
+int ec_poll_event(ec_ctx *ctx, ec_event *out) {
+    if (ctx == NULL || out == NULL) return 0;
+
+    ec_input_ring *ring = (ec_input_ring *)(ctx->area + ctx->header->input_offset);
+    uint32_t tail = atomic_load_explicit(&ring->tail, memory_order_relaxed);
+    uint32_t head = atomic_load_explicit(&ring->head, memory_order_acquire);
+    if (tail == head) return 0;
+
+    *out = ring->events[tail & (EC_EVENT_CAPACITY - 1u)];
+    atomic_store_explicit(&ring->tail, tail + 1u, memory_order_release);
+    return 1;
+}
+
+uint64_t ec_dropped_events(void *area, size_t size) {
+    ec_input_ring *ring = ring_of(area, size);
+    if (ring == NULL) return 0;
+    return atomic_load_explicit(&ring->dropped, memory_order_relaxed);
 }

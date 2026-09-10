@@ -83,8 +83,69 @@ class _Library:
         ]
         self._lib.ec_fill_rect.restype = None
 
+        self._lib.ec_poll_event.argtypes = [ctypes.c_void_p, ctypes.POINTER(_CEvent)]
+        self._lib.ec_poll_event.restype = ctypes.c_int
+
     def __getattr__(self, name):
         return getattr(self._lib, name)
+
+
+class _CEvent(ctypes.Structure):
+    """Событие ввода ровно так, как оно лежит в разделяемой памяти.
+
+    Порядок и типы полей обязаны совпадать с ec_event из eide_canvas.h.
+    Расхождение здесь не заметит ни компилятор, ни ctypes: программа просто
+    начнёт получать координаты в поле времени. Поэтому в проверках шима
+    раскладка выписана отдельно, списанная с заголовка C: перестановка полей
+    здесь роняет проверку.
+    """
+
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("pointer", ctypes.c_int32),
+        ("x", ctypes.c_int32),
+        ("y", ctypes.c_int32),
+        ("key", ctypes.c_int32),
+        ("modifiers", ctypes.c_uint32),
+        ("time_ms", ctypes.c_uint64),
+    ]
+
+
+# Виды событий. Совпадают с EC_EVENT_* из eide_canvas.h.
+POINTER_DOWN = 1
+POINTER_MOVE = 2
+POINTER_UP = 3
+KEY_DOWN = 4
+KEY_UP = 5
+
+
+class Event:
+    """Событие ввода в координатах канвы.
+
+    Пересчёт из координат экрана делает IDE: только она знает, куда и с каким
+    масштабом вписала кадр.
+    """
+
+    __slots__ = ("type", "pointer", "x", "y", "key", "modifiers", "time_ms")
+
+    def __init__(self, raw):
+        self.type = raw.type
+        self.pointer = raw.pointer
+        self.x = raw.x
+        self.y = raw.y
+        self.key = raw.key
+        self.modifiers = raw.modifiers
+        self.time_ms = raw.time_ms
+
+    @property
+    def is_pointer(self):
+        return self.type in (POINTER_DOWN, POINTER_MOVE, POINTER_UP)
+
+    def __repr__(self):
+        return (
+            "Event(type={0}, pointer={1}, x={2}, y={3}, key={4})"
+            .format(self.type, self.pointer, self.x, self.y, self.key)
+        )
 
 
 class Canvas:
@@ -122,6 +183,26 @@ class Canvas:
         """Заливает прямоугольник. Уехавший за край обрезается, а не падает."""
         self._begin()
         self._library.ec_fill_rect(self._ctx, int(x), int(y), int(w), int(h), color)
+
+    def poll_event(self):
+        """Следующее событие ввода или None, если их больше нет.
+
+        Разбирать очередь до пустоты нужно каждый кадр: кольцо конечно, и
+        программа, которая читает по одному событию за кадр, отстаёт от пальца
+        всё сильнее.
+        """
+        raw = _CEvent()
+        if not self._library.ec_poll_event(self._ctx, ctypes.byref(raw)):
+            return None
+        return Event(raw)
+
+    def events(self):
+        """Все накопившиеся события. Обычный способ разгрести очередь за кадр."""
+        while True:
+            event = self.poll_event()
+            if event is None:
+                return
+            yield event
 
     def present(self):
         """Показывает нарисованное. До этого вызова кадра не видно."""
