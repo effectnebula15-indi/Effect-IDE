@@ -41,6 +41,7 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.FoldState
 import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
@@ -63,6 +64,7 @@ import io.github.effectnebula.eide.ui.benchmarkEditor
 import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
+import io.github.effectnebula.eide.ui.search.ProjectSearchPanel
 import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
@@ -154,6 +156,7 @@ private fun BenchmarkOnly(seconds: Int, fontSizeSp: Float, highlight: Boolean) {
 @Composable
 private fun DesktopShell() {
     var showBenchmark by remember { mutableStateOf(false) }
+    var showProjectSearch by remember { mutableStateOf(Debug.projectSearch != null) }
     var showCanvas by remember { mutableStateOf(Debug.showCanvas) }
 
     // Взводится на Run и снимается первым же показом — как на Android и по той
@@ -218,7 +221,31 @@ private fun DesktopShell() {
             Tab("отрисовка · P2", showBenchmark) {
                 showBenchmark = true
                 showCanvas = false
+                showProjectSearch = false
             }
+            Tab("поиск по проекту", showProjectSearch) {
+                showProjectSearch = true
+                showBenchmark = false
+                showCanvas = false
+            }
+        }
+
+        if (showProjectSearch) {
+            ProjectSearchPanel(
+                tree = workspace.tree,
+                initialPattern = Debug.projectSearch.orEmpty(),
+                onOpen = { match ->
+                    notice = runCatching {
+                        val open = workspace.open(match.file)
+                        val offset = open.state.text.lineStart(match.line) + match.column
+                        open.state.setCarets(CaretSet.single(offset))
+                    }.fold({ null }, { "не открылся ${match.file.name}: ${it.message}" })
+                    showProjectSearch = false
+                    revision++
+                },
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
         }
 
         if (showBenchmark) {
@@ -563,6 +590,9 @@ private object Debug {
      * программу на Python — и возвращаются нарисованными.
      */
     val drag: String? get() = System.getProperty("eide.drag")
+
+    /** `-Deide.projectSearch=что` — открыть поиск по проекту с готовым запросом. */
+    val projectSearch: String? get() = System.getProperty("eide.projectSearch")
 
     /** `-Deide.search=что` — открыть поиск с готовым запросом. */
     val search: String? get() = System.getProperty("eide.search")
