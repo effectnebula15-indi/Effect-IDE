@@ -26,6 +26,13 @@ jobs:
       # проект целиком, а модули Android входят в тот же билд.
       - name: Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Умолчание у действия — "tools platform-tools", а пакета "tools"
+          # в репозитории Google больше нет: sdkmanager отвечает "Failed to find
+          # package 'tools'" и падает, не дав собраться ничему. Это сломалось
+          # само по себе, без единой правки у нас, — ровно тот случай, ради
+          # которого действия стоило бы прибивать к хешу, а не к тегу.
+          packages: platform-tools
 
       - name: Пакеты SDK и NDK
         run: |
