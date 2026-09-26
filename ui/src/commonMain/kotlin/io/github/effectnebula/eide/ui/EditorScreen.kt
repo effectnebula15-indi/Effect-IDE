@@ -20,6 +20,7 @@ import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.LineHighlighter
 import io.github.effectnebula.eide.core.syntax.TokenKind
 import io.github.effectnebula.eide.ui.editor.CodeEditor
+import io.github.effectnebula.eide.ui.editor.CompletionSource
 import io.github.effectnebula.eide.ui.editor.EditorColors
 import io.github.effectnebula.eide.ui.editor.GutterMark
 import io.github.effectnebula.eide.ui.editor.observeEditor
@@ -55,6 +56,8 @@ fun EditorScreen(
      * переживать переключение вкладок.
      */
     folds: FoldState? = null,
+    /** Автодополнение. `null` — его нет: см. [CodeEditor]. */
+    completion: CompletionSource? = null,
 ) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
@@ -67,6 +70,7 @@ fun EditorScreen(
             onFontSizeChange = onFontSizeChange,
             gutterMarks = gutterMarks,
             folds = folds,
+            completion = completion,
         )
 
         StatusBar(state)

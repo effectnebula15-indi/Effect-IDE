@@ -52,6 +52,10 @@ data class CompletionItem(
     val detail: String?,
     /** Участок, который вставка заменяет, если сервер его назвал. */
     val replaces: LspRange?,
+    /** По чему сортировать. Порядок в массиве ответа спецификация не обещает. */
+    val sortText: String? = null,
+    /** По чему отбирать дописанным. Если нет — по подписи. */
+    val filterText: String? = null,
 )
 
 data class Diagnostic(val range: LspRange, val severity: Severity, val message: String, val source: String?)
@@ -341,8 +345,10 @@ class LspClient(
                     ?: label,
                 detail = item["detail"]?.jsonPrimitive?.contentOrNull,
                 replaces = (edit?.get("range") ?: edit?.get("replace"))?.let(::parseRange),
+                sortText = item["sortText"]?.jsonPrimitive?.contentOrNull,
+                filterText = item["filterText"]?.jsonPrimitive?.contentOrNull,
             )
-        }
+        }.sortedWith(COMPLETION_ORDER)
     }
 
     private fun parseDiagnostic(element: JsonElement): Diagnostic? {

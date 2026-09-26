@@ -89,6 +89,8 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.runtime.produceState
+import kotlin.concurrent.thread
 import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.event.KeyEvent as AwtKeyEvent
@@ -198,6 +200,16 @@ private fun DesktopShell() {
 
     val startup = remember { startWorkspace() }
     val workspace = startup.workspace
+
+    // Сервер языка стартует в фоне: импорт pylsp — около секунды, и холодный
+    // старт IDE ждать его не должен. Пока не поднялся, автодополнения просто нет.
+    val languageServer by produceState<LanguageServer?>(null) {
+        value = withContext(Dispatchers.IO) { LanguageServer.start(workspaceRoot()) }
+    }
+    DisposableEffect(languageServer) {
+        val server = languageServer
+        onDispose { server?.let { thread(name = "pylsp-shutdown") { it.close() } } }
+    }
     var notice by remember { mutableStateOf(startup.failure) }
     var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE_SP) }
     var revision by remember { mutableStateOf(0) }
@@ -347,6 +359,7 @@ private fun DesktopShell() {
                     onRunStarted = { awaitingFirstFrame = true },
                     onProjectSearch = { showProjectSearch = true },
                     onGit = git?.let { { showGit = true } },
+                    languageServer = languageServer,
                     onChanged = { revision++ },
                 )
             }
@@ -533,6 +546,7 @@ private fun RunPanel(
     onRunStarted: () -> Unit,
     onProjectSearch: () -> Unit,
     onGit: (() -> Unit)?,
+    languageServer: LanguageServer?,
     onChanged: () -> Unit,
 ) {
     var output by remember { mutableStateOf("") }
@@ -719,6 +733,14 @@ private fun RunPanel(
             }
             Tab("Команды", showPalette) { showPalette = true }
             BasicText(status, style = TextStyle(color = Eide.colors.textDim, fontSize = 12.sp))
+            // Почему автодополнения нет — вслух: Ctrl+Space, который молча ничего
+            // не делает, читается как поломка, а не как «не установлен pylsp».
+            BasicText(
+                text = languageServer?.let { "автодополнение: ${it.description}" }
+                    ?: LanguageServer.missingReason
+                    ?: "автодополнение: запускается…",
+                style = TextStyle(color = Eide.colors.textDim, fontSize = 11.sp),
+            )
         }
 
         if (showSearch && search != null) {
@@ -759,6 +781,7 @@ private fun RunPanel(
                 onFontSizeChange = onFontSizeChange,
                 gutterMarks = marks.value,
                 folds = folds,
+                completion = remember(active.file, languageServer) { languageServer?.sourceFor(active.file) },
             )
         } else {
             Box(Modifier.weight(1f).padding(16.dp)) {
@@ -928,7 +951,11 @@ private suspend fun pressKeys(spec: String) {
     // Несколько сочетаний через пробел: «end enter» — поставить курсор в конец
     // строки и перевести строку. Проверять отступ иначе нечем: он появляется
     // только от настоящего нажатия.
-    for (chord in spec.split(' ').filter { it.isNotBlank() }) pressChord(chord)
+    for (chord in spec.split(' ').filter { it.isNotBlank() }) {
+        // «wait» — пауза, а не клавиша: ответ сервера языка приходит не сразу,
+        // первый — через секунду-другую, пока прогревается jedi.
+        if (chord == "wait") delay(WAIT_MS) else pressChord(chord)
+    }
 }
 
 private suspend fun pressChord(chord: String) {
@@ -976,7 +1003,11 @@ private val NAMED_KEYS = mapOf(
     "left" to AwtKeyEvent.VK_LEFT,
     "right" to AwtKeyEvent.VK_RIGHT,
     "backspace" to AwtKeyEvent.VK_BACK_SPACE,
+    "space" to AwtKeyEvent.VK_SPACE,
 )
+
+/** Пауза по «wait» в -Deide.press. */
+private const val WAIT_MS = 3_000L
 
 /** Пауза между нажатиями: интерфейс должен успеть перерисоваться. */
 private const val KEY_SETTLE_MS = 120L

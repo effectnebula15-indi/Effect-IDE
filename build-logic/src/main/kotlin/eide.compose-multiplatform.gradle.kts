@@ -13,3 +13,12 @@ plugins {
 kotlin {
     jvmToolchain(21)
 }
+
+// Сверка с Android API 27 классов Android-цели: общий код этого модуля едет на
+// телефон целиком, а lint его на API новее minSdk не проверяет (AndroidApiCheck.kt).
+registerAndroidApiCheck(
+    classesDir = "classes/kotlin/android/main",
+    compileTask = "compileAndroidMain",
+    classpathConfiguration = "androidCompileClasspath",
+    sourceDirs = listOf("src/commonMain/kotlin", "src/androidMain/kotlin"),
+)

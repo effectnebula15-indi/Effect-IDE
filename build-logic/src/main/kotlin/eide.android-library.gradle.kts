@@ -21,3 +21,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+// Сверка с Android API 27: lint такой ошибки не ловит, проверено опытом
+// (AndroidApiCheck.kt). Классы — отладочной сборки: код тот же, что в выпуске.
+afterEvaluate {
+    registerAndroidApiCheck(
+        classesDir = "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes",
+        compileTask = "compileDebugKotlin",
+        classpathConfiguration = "debugCompileClasspath",
+        sourceDirs = listOf("src/main/kotlin"),
+    )
+}

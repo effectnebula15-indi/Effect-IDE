@@ -1,5 +1,17 @@
 package io.github.effectnebula.eide.ui.editor
 
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.layout
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -101,6 +113,11 @@ fun CodeEditor(
      */
     onFontSizeChange: ((Float) -> Unit)? = null,
     /**
+     * Откуда брать варианты автодополнения. `null` — автодополнения нет, и
+     * Ctrl+Space ничего не делает: пустой список хуже отсутствующего.
+     */
+    completion: CompletionSource? = null,
+    /**
      * Крючок для замеров (P2). В обычной работе null, и ничего связанного с ним
      * не исполняется. Существует ради того, чтобы стенд мерил этот рендер,
      * а не свой собственный — см. [RenderProbe].
@@ -179,6 +196,39 @@ fun CodeEditor(
 
     val revision = rememberEditorRevision(state)
 
+    // Источник читается свежим на каждое нажатие, а в `remember` не идёт: точка
+    // сборки вправе пересоздавать его на каждой пересборке, и ключом он
+    // сбрасывал бы состояние списка — на этом уже сгорели пометки гаттера.
+    val completionSource by rememberUpdatedState(completion)
+    val completions = remember(state) { CompletionController() }
+    val completionScope = rememberCoroutineScope()
+
+    fun requestCompletion() {
+        val source = completionSource ?: return
+        completionScope.launch {
+            completions.show(state, completions.request(state, source).await())
+        }
+    }
+
+    // Каждая правка и каждое движение курсора доотбирают список. Точка,
+    // только что напечатанная, вызывает его сама: после `os.` человек ждёт
+    // именно список, и жать ради него Ctrl+Space — лишнее движение, а на
+    // телефоне Ctrl нет вовсе.
+    LaunchedEffect(state) {
+        var lastVersion = state.document.version
+        snapshotFlow { revision.longValue }.collect {
+            val version = state.document.version
+            val typed = version != lastVersion
+            lastVersion = version
+
+            if (completions.visible) completions.refresh(state)
+            val caret = state.carets.primary.head
+            if (typed && !completions.visible && caret > 0 && state.text.charAt(caret - 1) == '.') {
+                requestCompletion()
+            }
+        }
+    }
+
     // Границы прокрутки и ширина гаттера зависят от числа строк, а оно меняется
     // при правке. Считаются на месте использования, а не в теле composable:
     // пересборки на каждое нажатие мы как раз избегаем.
@@ -240,6 +290,29 @@ fun CodeEditor(
             .imeInput(state)
             .focusRequester(focusRequester)
             .focusable()
+            .onPreviewKeyEvent { event ->
+                // До редактора: пока список открыт, стрелки и Enter принадлежат
+                // ему, а не тексту.
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val command = event.isCtrlPressed || event.isMetaPressed
+                if (command && event.key == Key.Spacebar && completionSource != null) {
+                    requestCompletion()
+                    return@onPreviewKeyEvent true
+                }
+                if (event.key == Key.Escape && completions.waiting) {
+                    completions.hide()
+                    return@onPreviewKeyEvent true
+                }
+                if (!completions.visible) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionDown -> { completions.move(+1); true }
+                    Key.DirectionUp -> { completions.move(-1); true }
+                    Key.Enter, Key.NumPadEnter, Key.Tab ->
+                        completionSource?.let { completions.accept(state, it.encoding) } ?: false
+                    Key.Escape -> { completions.hide(); true }
+                    else -> false
+                }
+            }
             .editorKeyInput(state)
             .pointerInput(metrics) {
                 detectTapGestures { position ->
@@ -353,6 +426,39 @@ fun CodeEditor(
                 it.cacheMisses = cache.misses
                 it.firstVisibleLine = (scrollPx / metrics.height).toInt()
             }
+        }
+
+        if (completions.visible) {
+            CompletionPopup(
+                controller = completions,
+                onAccept = { index ->
+                    completionSource?.let { completions.accept(state, it.encoding, index) }
+                    runCatching { focusRequester.requestFocus() }
+                },
+                modifier = Modifier.layout { measurable, constraints ->
+                    val popup = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+                    layout(constraints.maxWidth, constraints.maxHeight) {
+                        // Чтение ревизии и прокрутки здесь — подписка фазы
+                        // размещения: список едет за курсором без пересборки.
+                        revision.longValue
+                        val text = state.text
+                        val line = text.lineOf(state.carets.primary.head)
+                        val top = folding.visualLine(line, text.lineCount) * metrics.height - scrollPx
+                        val x = gutterWidthPx(text.lineCount, metrics) + caretBounds(state, lineLayout).left - scrollXPx
+
+                        // Под строкой курсора, а если снизу не помещается — над ней:
+                        // список, уехавший за край, всё равно что закрытый.
+                        val below = top + metrics.height
+                        val y = if (below + popup.height <= constraints.maxHeight || top < popup.height) {
+                            below
+                        } else {
+                            top - popup.height
+                        }
+                        val clampedX = x.coerceIn(0f, max(0f, (constraints.maxWidth - popup.width).toFloat()))
+                        popup.place(clampedX.roundToInt(), y.roundToInt())
+                    }
+                },
+            )
         }
     }
 }
