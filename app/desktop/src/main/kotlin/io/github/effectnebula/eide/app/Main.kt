@@ -41,15 +41,13 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
-import io.github.effectnebula.eide.core.editor.Crumb
+import io.github.effectnebula.eide.core.lang.Languages
 import io.github.effectnebula.eide.core.editor.FoldState
-import io.github.effectnebula.eide.core.editor.PythonOutline
 import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.Highlighters
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
-import io.github.effectnebula.eide.core.text.Rope
 import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
 import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
 import io.github.effectnebula.eide.runner.LocalPythonBackend
@@ -750,7 +748,7 @@ private fun RunPanel(
                 onChanged()
             }
 
-            Breadcrumbs(active.state, outlineFor(active.name))
+            Breadcrumbs(active.state, Languages.forFile(active.name).outline)
 
             EditorScreen(
                 active.state,
@@ -774,16 +772,6 @@ private fun RunPanel(
         OutputPanel(output, Modifier.fillMaxWidth().weight(OUTPUT_WEIGHT))
     }
 }
-
-/**
- * Чем считать путь для этого файла.
- *
- * Только Python: расчёт идёт по отступам, а для языка со скобками он даст
- * выдуманную вложенность (`core-breadcrumbs.md`). Для остальных файлов строки
- * пути просто нет — это честнее, чем показывать неверную.
- */
-private fun outlineFor(name: String): ((Rope, Int) -> List<Crumb>)? =
-    if (name.substringAfterLast('.', "").lowercase() == "py") PythonOutline::crumbsAt else null
 
 /** Ширина колонки дерева: помещается путь средней длины, но не съедает редактор. */
 private val TREE_WIDTH = 280.dp
@@ -937,14 +925,21 @@ private suspend fun dragMouse(path: String) {
  * что написано в палитре, и проверять можно ровно обещанное.
  */
 private suspend fun pressKeys(spec: String) {
-    val parts = spec.lowercase().split('+').map { it.trim() }.filter { it.isNotEmpty() }
+    // Несколько сочетаний через пробел: «end enter» — поставить курсор в конец
+    // строки и перевести строку. Проверять отступ иначе нечем: он появляется
+    // только от настоящего нажатия.
+    for (chord in spec.split(' ').filter { it.isNotBlank() }) pressChord(chord)
+}
+
+private suspend fun pressChord(chord: String) {
+    val parts = chord.lowercase().split('+').map { it.trim() }.filter { it.isNotEmpty() }
     val key = parts.lastOrNull() ?: return
 
     val code = when {
         key.length == 1 -> AwtKeyEvent.getExtendedKeyCodeForChar(key[0].code)
         key.startsWith("f") && key.drop(1).toIntOrNull() != null ->
             AwtKeyEvent.VK_F1 + key.drop(1).toInt() - 1
-        else -> AwtKeyEvent.VK_UNDEFINED
+        else -> NAMED_KEYS[key] ?: AwtKeyEvent.VK_UNDEFINED
     }
     if (code == AwtKeyEvent.VK_UNDEFINED) {
         System.err.println("-Deide.press не разобрал клавишу «$key»")
@@ -964,9 +959,27 @@ private suspend fun pressKeys(spec: String) {
         robot.keyRelease(code)
         // Отпускаем в обратном порядке: так же, как отпускают пальцы.
         modifiers.asReversed().forEach { robot.keyRelease(it) }
-        delay(DRAG_SETTLE_MS)
-    }.onFailure { System.err.println("не получилось нажать «$spec»: $it") }
+        delay(KEY_SETTLE_MS)
+    }.onFailure { System.err.println("не получилось нажать «$chord»: $it") }
 }
+
+/** Клавиши без знака: по имени, а не по коду — имена читаются в командной строке. */
+private val NAMED_KEYS = mapOf(
+    "enter" to AwtKeyEvent.VK_ENTER,
+    "tab" to AwtKeyEvent.VK_TAB,
+    "escape" to AwtKeyEvent.VK_ESCAPE,
+    "esc" to AwtKeyEvent.VK_ESCAPE,
+    "end" to AwtKeyEvent.VK_END,
+    "home" to AwtKeyEvent.VK_HOME,
+    "down" to AwtKeyEvent.VK_DOWN,
+    "up" to AwtKeyEvent.VK_UP,
+    "left" to AwtKeyEvent.VK_LEFT,
+    "right" to AwtKeyEvent.VK_RIGHT,
+    "backspace" to AwtKeyEvent.VK_BACK_SPACE,
+)
+
+/** Пауза между нажатиями: интерфейс должен успеть перерисоваться. */
+private const val KEY_SETTLE_MS = 120L
 
 private const val DRAG_STEP_MS = 8L
 private const val DRAG_SETTLE_MS = 300L

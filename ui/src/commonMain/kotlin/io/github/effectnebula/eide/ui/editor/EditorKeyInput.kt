@@ -13,6 +13,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.editor.INDENT_UNIT
 import io.github.effectnebula.eide.core.editor.MoveTo
 
 /**
@@ -33,13 +34,13 @@ internal fun Modifier.editorKeyInput(state: EditorState): Modifier =
     }
 
 /**
- * Отступ — четыре пробела, а не табуляция.
+ * Отступ по Tab — тот же, которым отступает Enter.
  *
- * Причина не в религии, а в Python: смешение табов и пробелов там ошибка
- * времени выполнения, а не вопрос вкуса. Настройкой это станет тогда, когда
- * появятся настройки.
+ * Берётся из ядра (`INDENT_UNIT`), а не объявляется здесь заново: два числа
+ * в двух модулях разъезжаются молча, а увидеть это можно только на файле,
+ * где половина строк отступлена иначе.
  */
-internal const val INDENT: String = "    "
+internal const val INDENT: String = INDENT_UNIT
 
 private fun handleKey(state: EditorState, event: KeyEvent): Boolean {
     val shift = event.isShiftPressed

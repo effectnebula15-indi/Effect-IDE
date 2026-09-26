@@ -2,6 +2,7 @@ package io.github.effectnebula.eide.core.project
 
 import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.lang.Languages
 import io.github.effectnebula.eide.core.text.Document
 import io.github.effectnebula.eide.platform.GraphemeBreaker
 import java.io.File
@@ -78,7 +79,7 @@ class Workspace(
         val opened = OpenFile(
             file = file,
             format = loaded.format,
-            state = EditorState(Document(loaded.text), graphemes),
+            state = EditorState(Document(loaded.text), graphemes, Languages.forFile(file.name).indent),
             readOnlyReason = loaded.readOnlyReason,
         )
         this.opened[key] = opened

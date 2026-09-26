@@ -37,6 +37,12 @@ fun interface EditorListener {
 class EditorState(
     val document: Document = Document(),
     private val graphemes: GraphemeBreaker,
+    /**
+     * Чем отступать новую строку. Умолчание ничего не знает про язык и просто
+     * повторяет отступ текущей строки; питоновское правило подставляет тот, кто
+     * знает имя файла.
+     */
+    private val indent: IndentRule = IndentRule.CopyPrevious,
 ) {
     var carets: CaretSet = CaretSet.single(0)
         private set
@@ -92,7 +98,7 @@ class EditorState(
     fun insertNewline() {
         val replacements = carets.carets.map { caret ->
             val line = document.text.lineOf(caret.start)
-            Replacement(caret.start, caret.end, "\n" + indentOf(line))
+            Replacement(caret.start, caret.end, "\n" + indent.indentFor(document.text, line, caret.start))
         }
         applyEdit(EditTransaction(replacements), EditKind.Typing)
     }
@@ -255,11 +261,4 @@ class EditorState(
         notifyChanged()
     }
 
-    private fun indentOf(line: Int): String {
-        val start = document.text.lineStart(line)
-        val end = document.text.lineEnd(line)
-        var i = start
-        while (i < end && document.text.charAt(i).let { it == ' ' || it == '\t' }) i++
-        return document.text.substring(start, i)
-    }
 }
