@@ -64,7 +64,11 @@ import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
 import io.github.effectnebula.eide.core.command.Command
+import io.github.effectnebula.eide.core.editor.Crumb
+import io.github.effectnebula.eide.core.editor.PythonOutline
+import io.github.effectnebula.eide.core.text.Rope
 import io.github.effectnebula.eide.ui.command.CommandPalette
+import io.github.effectnebula.eide.ui.editor.Breadcrumbs
 import io.github.effectnebula.eide.ui.editor.FONT_STEP_SP
 import io.github.effectnebula.eide.ui.editor.clampFontSize
 import io.github.effectnebula.eide.ui.search.ProjectSearchPanel
@@ -107,6 +111,16 @@ private val PROTOTYPE_LIMITS = RunLimits(
     timeoutMillis = 10_000,
     maxResidentBytes = 256L * 1024 * 1024,
 )
+
+/**
+ * Чем считать путь для этого файла.
+ *
+ * Только Python: расчёт идёт по отступам, а для языка со скобками он даст
+ * выдуманную вложенность (`core-breadcrumbs.md`). Для остальных файлов строки
+ * пути просто нет — это честнее, чем показывать неверную.
+ */
+private fun outlineFor(name: String): ((Rope, Int) -> List<Crumb>)? =
+    if (name.substringAfterLast('.', "").lowercase() == "py") PythonOutline::crumbsAt else null
 
 private enum class Screen { Project, Search, Code, Render }
 
@@ -458,6 +472,10 @@ private fun WorkbenchScreen(
                 onChanged = { workspaceRevision++ },
             )
         }
+
+        // Над редактором, а не под: на телефоне важнее знать, где ты, чем видеть
+        // ещё одну строку кода, а строка пути занимает одну.
+        active?.let { Breadcrumbs(it.state, outlineFor(it.name)) }
 
         Box(Modifier.fillMaxWidth().weight(1f)) {
             if (active != null) {

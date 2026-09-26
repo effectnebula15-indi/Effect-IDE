@@ -41,12 +41,15 @@ import io.github.effectnebula.eide.core.exec.RunHandle
 import io.github.effectnebula.eide.core.exec.RunLimits
 import io.github.effectnebula.eide.core.exec.RunListener
 import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.editor.Crumb
 import io.github.effectnebula.eide.core.editor.FoldState
+import io.github.effectnebula.eide.core.editor.PythonOutline
 import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
 import io.github.effectnebula.eide.core.syntax.Highlighters
 import io.github.effectnebula.eide.core.project.ProjectTree
 import io.github.effectnebula.eide.core.project.Workspace
+import io.github.effectnebula.eide.core.text.Rope
 import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
 import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
 import io.github.effectnebula.eide.runner.LocalPythonBackend
@@ -65,6 +68,7 @@ import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.core.command.Command
 import io.github.effectnebula.eide.ui.benchmarkEditor
 import io.github.effectnebula.eide.ui.command.CommandPalette
+import io.github.effectnebula.eide.ui.editor.Breadcrumbs
 import io.github.effectnebula.eide.ui.editor.FONT_STEP_SP
 import io.github.effectnebula.eide.ui.editor.clampFontSize
 import io.github.effectnebula.eide.ui.project.FileTabs
@@ -746,6 +750,8 @@ private fun RunPanel(
                 onChanged()
             }
 
+            Breadcrumbs(active.state, outlineFor(active.name))
+
             EditorScreen(
                 active.state,
                 Modifier.weight(1f),
@@ -768,6 +774,16 @@ private fun RunPanel(
         OutputPanel(output, Modifier.fillMaxWidth().weight(OUTPUT_WEIGHT))
     }
 }
+
+/**
+ * Чем считать путь для этого файла.
+ *
+ * Только Python: расчёт идёт по отступам, а для языка со скобками он даст
+ * выдуманную вложенность (`core-breadcrumbs.md`). Для остальных файлов строки
+ * пути просто нет — это честнее, чем показывать неверную.
+ */
+private fun outlineFor(name: String): ((Rope, Int) -> List<Crumb>)? =
+    if (name.substringAfterLast('.', "").lowercase() == "py") PythonOutline::crumbsAt else null
 
 /** Ширина колонки дерева: помещается путь средней длины, но не съедает редактор. */
 private val TREE_WIDTH = 280.dp
