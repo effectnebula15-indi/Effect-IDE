@@ -186,4 +186,35 @@ class GitRepositoryTest {
             assertEquals(listOf("main"), git.branches())
         }
     }
+
+    /** Дописывает настройки в `.git/config` — туда же, куда пишет сам git. */
+    private fun configure(vararg lines: String) {
+        File(temp, ".git/config").appendText(lines.joinToString("\n", postfix = "\n"))
+    }
+
+    @Test
+    fun `identity comes from the repository configuration`() {
+        repo()
+        configure("[user]", "\tname = Иван Иванов", "\temail = ivan@example.org")
+
+        val git = GitRepository.open(temp)!!
+
+        assertEquals(GitIdentity("Иван Иванов", "ivan@example.org"), git.identity())
+    }
+
+    @Test
+    fun `a blank setting counts as missing`() {
+        // Коммит с выдуманной почтой видно в истории годами, а переписать её
+        // проще всего никогда. Пустая настройка — повод спросить, а не угадать.
+        //
+        // Проверяется именно пустая, а не отсутствующая: JGit наследует
+        // пользовательский `~/.gitconfig`, и на машине с настроенным git
+        // «отсутствующей» почты не бывает. Выяснилось это здесь же — первая
+        // редакция теста ждала null и получила почту из глобальных настроек.
+        repo()
+        configure("[user]", "\tname = Иван Иванов", "\temail =")
+
+        assertNull(GitRepository.open(temp)!!.identity())
+    }
+
 }

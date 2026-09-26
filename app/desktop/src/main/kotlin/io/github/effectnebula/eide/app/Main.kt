@@ -56,7 +56,10 @@ import io.github.effectnebula.eide.ui.EditorScreen
 import io.github.effectnebula.eide.ui.editor.AutoSave
 import io.github.effectnebula.eide.ui.editor.GutterMark
 import io.github.effectnebula.eide.ui.editor.rememberGutterMarks
+import io.github.effectnebula.eide.vcs.FileStatus
+import io.github.effectnebula.eide.vcs.GitIdentity
 import io.github.effectnebula.eide.vcs.GitRepository
+import io.github.effectnebula.eide.vcs.RepositoryStatus
 import io.github.effectnebula.eide.vcs.LineMark
 import io.github.effectnebula.eide.ui.RenderBenchmark
 import io.github.effectnebula.eide.core.command.Command
@@ -68,6 +71,9 @@ import io.github.effectnebula.eide.ui.project.FileTabs
 import io.github.effectnebula.eide.ui.project.FileTreePanel
 import io.github.effectnebula.eide.ui.run.OutputPanel
 import io.github.effectnebula.eide.ui.search.ProjectSearchPanel
+import io.github.effectnebula.eide.ui.vcs.ChangeKind
+import io.github.effectnebula.eide.ui.vcs.ChangedFile
+import io.github.effectnebula.eide.ui.vcs.GitPanel
 import io.github.effectnebula.eide.ui.search.SearchBar
 import io.github.effectnebula.eide.ui.theme.Eide
 import io.github.effectnebula.eide.ui.theme.LocalEditorFont
@@ -168,6 +174,7 @@ private fun BenchmarkOnly(seconds: Int, fontSizeSp: Float, highlight: Boolean) {
 private fun DesktopShell() {
     var showBenchmark by remember { mutableStateOf(false) }
     var showProjectSearch by remember { mutableStateOf(Debug.projectSearch != null) }
+    var showGit by remember { mutableStateOf(Debug.git) }
     var showCanvas by remember { mutableStateOf(Debug.showCanvas) }
 
     // Взводится на Run и снимается первым же показом — как на Android и по той
@@ -222,9 +229,11 @@ private fun DesktopShell() {
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Tab("редактор", !showBenchmark && !showCanvas) {
+            Tab("редактор", !showBenchmark && !showCanvas && !showProjectSearch && !showGit) {
                 showBenchmark = false
                 showCanvas = false
+                showProjectSearch = false
+                showGit = false
             }
             if (canvas != null) {
                 Tab("графика", showCanvas) { showCanvas = true }
@@ -233,12 +242,37 @@ private fun DesktopShell() {
                 showBenchmark = true
                 showCanvas = false
                 showProjectSearch = false
+                showGit = false
             }
             Tab("поиск по проекту", showProjectSearch) {
                 showProjectSearch = true
                 showBenchmark = false
                 showCanvas = false
+                showGit = false
             }
+            if (git != null) {
+                Tab("git", showGit) {
+                    showGit = true
+                    showProjectSearch = false
+                    showBenchmark = false
+                    showCanvas = false
+                }
+            }
+        }
+
+        if (showGit && git != null) {
+            GitTab(
+                git = git,
+                onOpen = { file ->
+                    workspace.saveModified()
+                    notice = runCatching { workspace.open(file) }
+                        .fold({ null }, { "не открылся ${file.name}: ${it.message}" })
+                    showGit = false
+                    revision++
+                },
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
         }
 
         if (showProjectSearch) {
@@ -308,12 +342,104 @@ private fun DesktopShell() {
                     onFontSizeChange = { fontSize = it },
                     onRunStarted = { awaitingFirstFrame = true },
                     onProjectSearch = { showProjectSearch = true },
+                    onGit = git?.let { { showGit = true } },
                     onChanged = { revision++ },
                 )
             }
         }
     }
 }
+
+/**
+ * Вкладка git: статус репозитория и коммит.
+ *
+ * Вся работа с репозиторием — в фоне: `status()` это обход рабочей копии, а
+ * `commit()` — запись в хранилище. На главном потоке им делать нечего, и панель
+ * сама ничего не считает (разбор — в `ui-git.md`).
+ */
+@Composable
+private fun GitTab(git: GitRepository, onOpen: (File) -> Unit, modifier: Modifier = Modifier) {
+    var status by remember { mutableStateOf<RepositoryStatus?>(null) }
+    var identity by remember { mutableStateOf<GitIdentity?>(null) }
+    var busy by remember { mutableStateOf(true) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var refreshes by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(git, refreshes) {
+        busy = true
+        withContext(Dispatchers.IO) {
+            val read = runCatching { git.status() to git.identity() }.getOrNull()
+            status = read?.first
+            identity = read?.second
+        }
+        busy = false
+    }
+
+    GitPanel(
+        branch = status?.branch,
+        files = status?.files.orEmpty().map { (path, state) -> ChangedFile(path, state.toChangeKind()) },
+        identity = identity?.let { "${it.name} <${it.email}>" },
+        busy = busy,
+        notice = notice,
+        onRefresh = {
+            notice = null
+            refreshes++
+        },
+        onCommit = { message ->
+            val who = identity
+            if (who == null) {
+                notice = "не задан автор"
+            } else {
+                busy = true
+                scope.launch {
+                    notice = withContext(Dispatchers.IO) {
+                        runCatching {
+                            git.stageAll()
+                            git.commit(message, who.name, who.email)
+                        }.fold(
+                            { result ->
+                                // Про непоставленную подпись молчать нельзя: в репозитории
+                                // с обязательной подписью такой коммит отклонят на сервере,
+                                // и узнать об этом лучше здесь (ADR-006).
+                                val signed = if (result.signingRequested) {
+                                    ", но подпись просили, а JGit её не ставит"
+                                } else {
+                                    ""
+                                }
+                                "коммит ${result.id.take(SHORT_ID_LENGTH)}$signed"
+                            },
+                            { "не закоммитилось: ${it.message}" },
+                        )
+                    }
+                    busy = false
+                    refreshes++
+                }
+            }
+        },
+        onOpen = { onOpen(File(git.workTree, it.path)) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * Перевод статуса файла из `:vcs` в то, что понимает `:ui`.
+ *
+ * Два одинаковых перечня в разных модулях — цена границы: `:ui` не имеет права
+ * зависеть от `:vcs` (проверяется `checkArchitecture`), а знать про git ей и
+ * незачем — она рисует буквы и пути. Перевод живёт в точке сборки, как и перевод
+ * пометок гаттера.
+ */
+private fun FileStatus.toChangeKind(): ChangeKind = when (this) {
+    FileStatus.Untracked -> ChangeKind.Untracked
+    FileStatus.Added -> ChangeKind.Added
+    FileStatus.Modified -> ChangeKind.Modified
+    FileStatus.Deleted -> ChangeKind.Deleted
+    FileStatus.Conflicted -> ChangeKind.Conflicted
+}
+
+/** Сколько знаков хеша показывать: столько же, сколько `git log --oneline`. */
+private const val SHORT_ID_LENGTH = 7
 
 /** Корень проекта: то же, что видит дерево файлов. */
 private fun workspaceRoot(): File = File(Debug.project ?: System.getProperty("user.dir"))
@@ -402,6 +528,7 @@ private fun RunPanel(
     onFontSizeChange: (Float) -> Unit,
     onRunStarted: () -> Unit,
     onProjectSearch: () -> Unit,
+    onGit: (() -> Unit)?,
     onChanged: () -> Unit,
 ) {
     var output by remember { mutableStateOf("") }
@@ -496,12 +623,15 @@ private fun RunPanel(
      * «Остановить» — это одно место в списке, и показывать надо ту, которую
      * сейчас можно нажать. Палитра к смене списка готова (её тест на это есть).
      */
-    val commands = remember(handle, showSearch, search != null) {
+    val commands = remember(handle, showSearch, search != null, onGit != null) {
         buildList {
             add(Command("run.toggle", if (handle != null) "Остановить" else "Запустить", "Ctrl+R"))
             add(Command("file.saveAll", "Сохранить всё", "Ctrl+S"))
             if (search != null) add(Command("search.find", "Найти в файле", "Ctrl+F"))
             add(Command("search.project", "Найти в проекте"))
+            // Команды нет, если репозитория нет: пункт, который ничего не делает,
+            // хуже отсутствующего — по нему жмут и решают, что сломалось.
+            if (onGit != null) add(Command("vcs.status", "Показать git"))
             add(Command("view.zoomIn", "Увеличить шрифт"))
             add(Command("view.zoomOut", "Уменьшить шрифт"))
         }
@@ -517,6 +647,7 @@ private fun RunPanel(
             }
             "search.find" -> showSearch = true
             "search.project" -> onProjectSearch()
+            "vcs.status" -> onGit?.invoke()
             "view.zoomIn" -> onFontSizeChange(clampFontSize(fontSizeSp + FONT_STEP_SP))
             "view.zoomOut" -> onFontSizeChange(clampFontSize(fontSizeSp - FONT_STEP_SP))
         }
@@ -671,6 +802,9 @@ private object Debug {
 
     /** `-Deide.palette` — открыть палитру команд. Нужно самоснимку: её не набрать. */
     val palette: Boolean get() = System.getProperty("eide.palette") != null
+
+    /** `-Deide.git` — открыть вкладку git. */
+    val git: Boolean get() = System.getProperty("eide.git") != null
 
     /** `-Deide.search=что` — открыть поиск с готовым запросом. */
     val search: String? get() = System.getProperty("eide.search")

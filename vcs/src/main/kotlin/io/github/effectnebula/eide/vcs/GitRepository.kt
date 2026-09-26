@@ -36,6 +36,9 @@ enum class LineMark {
  */
 data class CommitResult(val id: String, val signingRequested: Boolean)
 
+/** Кем подписывать коммит. */
+data class GitIdentity(val name: String, val email: String)
+
 data class RepositoryStatus(
     val branch: String?,
     val files: Map<String, FileStatus>,
@@ -103,6 +106,25 @@ class GitRepository private constructor(private val git: Git) : AutoCloseable {
      * об этом лучше сразу. Поэтому [CommitResult.signingRequested] говорит,
      * что настройка просила подпись, и интерфейс обязан это показать.
      */
+    /**
+     * Имя и почта из настроек git — то, чем подписался бы `git commit` в консоли.
+     *
+     * Возвращает null, если хоть одно поле не задано. Придумывать автора нельзя:
+     * коммит с чужим или выдуманным именем — это то, что потом видно в истории
+     * годами, и переписать её проще всего никогда.
+     *
+     * Настройки берутся из конфигурации репозитория; она наследует пользовательскую
+     * (`~/.gitconfig`) — но только на десктопе. На Android домашней конфигурации
+     * обычно нет вовсе, поэтому интерфейс обязан уметь спросить имя сам, а не
+     * рассчитывать на этот метод.
+     */
+    fun identity(): GitIdentity? {
+        val config = git.repository.config
+        val name = config.getString("user", null, "name")?.takeIf { it.isNotBlank() }
+        val email = config.getString("user", null, "email")?.takeIf { it.isNotBlank() }
+        return if (name != null && email != null) GitIdentity(name, email) else null
+    }
+
     fun commit(message: String, authorName: String, authorEmail: String): CommitResult {
         val signingRequested = git.repository.config
             .getBoolean("commit", null, "gpgsign", false)
