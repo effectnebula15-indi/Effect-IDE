@@ -40,12 +40,13 @@ class JsonRpcTest {
         onRequest: (String, JsonElement?) -> JsonElement? = { method, _ ->
             throw ResponseError(JsonRpcConnection.METHOD_NOT_FOUND, "нет $method")
         },
+        onClosed: (String) -> Unit = { closeReasons += it },
     ) = JsonRpcConnection(
         input = server.clientInput,
         output = server.clientOutput,
         onNotification = { method, params -> notifications += method to params },
         onRequest = onRequest,
-        onClosed = { closeReasons += it },
+        onClosed = onClosed,
     ).also { it.start() }
 
     private fun received(): JsonObject = server.received()
@@ -113,6 +114,24 @@ class JsonRpcTest {
         assertIs<ConnectionClosed>(assertFailsWith<ExecutionException> { second.result.await() }.cause)
         rpc.close()
         assertEquals(1, closeReasons.size, "о смерти соединения сообщается один раз")
+    }
+
+    @Test
+    fun `the owner hears about the death before any waiting call does`() {
+        // Медленный onClosed делает гонку, которую CI поймала однажды, воспроизводимой
+        // всегда: при обратном порядке ожидающий проснётся раньше, чем onClosed допишет.
+        val rpc = connect(onClosed = { reason ->
+            Thread.sleep(200)
+            closeReasons += reason
+        })
+        val call = rpc.request("ждущий")
+        received()
+
+        server.die()
+
+        assertIs<ConnectionClosed>(assertFailsWith<ExecutionException> { call.result.await() }.cause)
+        assertEquals(1, closeReasons.size, "проснувшийся вызов должен уже видеть последствия onClosed")
+        rpc.close()
     }
 
     @Test

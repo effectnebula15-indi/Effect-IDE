@@ -54,7 +54,11 @@ class JsonRpcConnection(
     private val onRequest: (method: String, params: JsonElement?) -> JsonElement? = { method, _ ->
         throw ResponseError(METHOD_NOT_FOUND, "метод $method не поддерживается")
     },
-    /** Куда сообщить о смерти соединения — один раз, с причиной. */
+    /**
+     * Куда сообщить о смерти соединения — один раз, с причиной, и раньше, чем
+     * ожидающие вызовы получат [ConnectionClosed]. Вызывается в том потоке, что
+     * первым заметил конец: в читающем или в вызвавшем [close].
+     */
     private val onClosed: (reason: String) -> Unit = {},
 ) : AutoCloseable {
 
@@ -207,11 +211,16 @@ class JsonRpcConnection(
 
     private fun shutDown(reason: String) {
         if (!closed.compareAndSet(false, true)) return
+        // Сперва владельцу, потом ожидающим: кто получил ConnectionClosed, тот уже
+        // видит последствия onClosed (например, статус «сервер упал»). В обратном
+        // порядке ожидающий просыпается раньше и видит соединение «ещё живым» —
+        // так CI и поймала гонку в тесте. Цена: медленный onClosed задерживает
+        // пробуждение ожидающих, поэтому он должен быть коротким.
+        runCatching { onClosed(reason) }
         // Всё, что ждёт ответа, узнаёт о смерти соединения сейчас, а не никогда.
         val waiting = pending.values.toList()
         pending.clear()
         waiting.forEach { it.completeExceptionally(ConnectionClosed(reason)) }
-        runCatching { onClosed(reason) }
     }
 
     companion object {
