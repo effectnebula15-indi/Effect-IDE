@@ -3,6 +3,7 @@ package io.github.effectnebula.eide.ui.editor
 import io.github.effectnebula.eide.core.syntax.LineHighlight
 import io.github.effectnebula.eide.core.syntax.PythonHighlighter
 import io.github.effectnebula.eide.core.text.Document
+import io.github.effectnebula.eide.core.text.EditKind
 import io.github.effectnebula.eide.core.text.EditTransaction
 import io.github.effectnebula.eide.core.text.Rope
 import kotlin.test.Test
@@ -103,6 +104,26 @@ class LineStatesTest {
         assertTrue(
             cache.stateBefore(document, 3) != LineHighlight.STATE_INITIAL,
             "две правки подряд оставили кэш несогласованным",
+        )
+    }
+
+    @Test
+    fun `undoing a deletion across lines recomputes from its earliest point`() {
+        // Откат применяет правки в обратном порядке, и последней оказывается
+        // самая правая — строкой ниже. Пересчёт от неё оставил бы в кэше
+        // состояние первой строки, посчитанное без третьей кавычки.
+        val document = Document(Rope.of("s = \"\"\"\nxbody"))
+        document.apply(EditTransaction.delete(8, 9), EditKind.Deleting, 0)
+        document.apply(EditTransaction.delete(7, 8), EditKind.Deleting, 0)
+        document.apply(EditTransaction.delete(6, 7), EditKind.Deleting, 0)
+        val cache = LineStates(PythonHighlighter)
+        assertEquals(LineHighlight.STATE_INITIAL, cache.stateBefore(document, 1))
+
+        document.undo()
+
+        assertTrue(
+            cache.stateBefore(document, 1) != LineHighlight.STATE_INITIAL,
+            "после отката вторая строка снова внутри докстринга",
         )
     }
 

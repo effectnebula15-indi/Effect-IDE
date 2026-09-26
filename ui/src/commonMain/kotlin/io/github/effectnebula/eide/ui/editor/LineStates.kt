@@ -67,7 +67,7 @@ internal class LineStates(private val highlighter: LineHighlighter) {
         if (document.version == seenVersion) return
 
         val change = document.lastChange
-        val changedLine = change?.edit?.replacements?.firstOrNull()?.start?.let { offset ->
+        val changedLine = change?.firstChangedOffset()?.let { offset ->
             document.text.lineOf(offset.coerceIn(0, document.text.length))
         }
 

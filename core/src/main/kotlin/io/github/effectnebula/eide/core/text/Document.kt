@@ -15,12 +15,33 @@ enum class EditKind {
     Other,
 }
 
-/** Что изменилось в документе — чтобы подписчики не сравнивали тексты целиком. */
+/**
+ * Что изменилось в документе — чтобы подписчики не сравнивали тексты целиком.
+ *
+ * Правок — список, а не одна: откат группы применяет их несколько подряд, по
+ * одной на каждое слово набора. Когда здесь лежала только последняя, откат
+ * набранного «abc» выглядел для подписчика как удаление одной буквы, и всё, что
+ * переносит офсеты через правку, уезжало на две позиции.
+ */
 data class DocumentChange(
-    val edit: EditTransaction,
+    /** Правки в порядке применения; офсеты каждой — в тексте после предыдущей. */
+    val edits: List<EditTransaction>,
     val versionBefore: Long,
     val versionAfter: Long,
-)
+) {
+    /** Переносит офсет через весь шаг — по правилам [EditTransaction.mapOffset]. */
+    fun mapOffset(offset: Int): Int = edits.fold(offset) { at, edit -> edit.mapOffset(at) }
+
+    /**
+     * Самое раннее место в итоговом тексте, где что-то поменялось; null — нигде.
+     *
+     * Минимум по всем правкам, а не начало последней: при откате стирания
+     * последней применяется самая правая, и она может оказаться строкой ниже.
+     * Переносить начала через последующие правки не нужно: правка сдвигает только
+     * то, что не левее её собственного начала, и минимум от этого не меняется.
+     */
+    fun firstChangedOffset(): Int? = edits.mapNotNull { it.replacements.firstOrNull()?.start }.minOrNull()
+}
 
 /**
  * Текст документа вместе с историей правок.
@@ -95,7 +116,7 @@ class Document(initial: Rope = Rope.EMPTY) {
             ?.let { it.start + it.text.length }
             ?: -1
 
-        return DocumentChange(edit, versionBefore, version).also { lastChange = it }
+        return DocumentChange(listOf(edit), versionBefore, version).also { lastChange = it }
     }
 
     /** Откатывает последнюю группу правок целиком. */
@@ -113,7 +134,7 @@ class Document(initial: Rope = Rope.EMPTY) {
         val group = top.group
         val versionBefore = version
 
-        var applied: EditTransaction? = null
+        val applied = ArrayList<EditTransaction>()
         while (true) {
             val entry = from.lastOrNull() ?: break
             if (entry.group != group) break
@@ -121,7 +142,7 @@ class Document(initial: Rope = Rope.EMPTY) {
 
             val transaction = pick(entry)
             text = transaction.applyTo(text)
-            applied = transaction
+            applied += transaction
             to.addLast(entry)
         }
 
@@ -129,7 +150,7 @@ class Document(initial: Rope = Rope.EMPTY) {
         // Следующая правка после отката не должна приклеиться к прежней группе.
         breakGrouping()
 
-        return applied?.let { DocumentChange(it, versionBefore, version) }?.also { lastChange = it }
+        return DocumentChange(applied, versionBefore, version).also { lastChange = it }
     }
 
     /** Принудительно закрывает текущую группу: следующая правка начнёт новую. */

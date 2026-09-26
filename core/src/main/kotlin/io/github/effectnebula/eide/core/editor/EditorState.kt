@@ -187,7 +187,9 @@ class EditorState(
         if (!happened) return false
         val lastChange = document.lastChange
         if (lastChange != null) {
-            val target = lastChange.edit.replacements.firstOrNull()
+            // По последней применённой правке: при откате набора это первая
+            // набранная буква, и курсор встаёт туда, где набор начинался.
+            val target = lastChange.edits.last().replacements.firstOrNull()
                 ?.let { it.start + it.text.length }
                 ?: 0
             carets = CaretSet.single(target.coerceIn(0, document.text.length))
@@ -256,8 +258,8 @@ class EditorState(
 
     private fun applyEdit(edit: EditTransaction, kind: EditKind) {
         if (edit.isEmpty || edit.replacements.all { it.start == it.end && it.text.isEmpty() }) return
-        val change = document.apply(edit, kind) ?: return
-        carets = carets.afterEdit(change.edit)
+        document.apply(edit, kind) ?: return
+        carets = carets.afterEdit(edit)
         notifyChanged()
     }
 

@@ -152,4 +152,52 @@ class DocumentTest {
 
         assertEquals("старт", document.text.toString(), "история не свернулась обратно в исходный текст")
     }
+
+    @Test
+    fun `undoing a typed word reports every edit it applied`() {
+        // Откат группы — три удаления, а не одно. Подписчик, переносящий офсеты
+        // (пометки ошибок), должен увидеть все три: иначе он сдвинет всё на одну
+        // букву вместо трёх.
+        val document = Document(Rope.of("xy"))
+        for ((index, letter) in "abc".withIndex()) {
+            document.apply(EditTransaction.insert(1 + index, letter.toString()), EditKind.Typing, 0)
+        }
+        assertEquals("xabcy", document.text.toString())
+
+        val change = document.undo()!!
+
+        assertEquals(3, change.edits.size)
+        assertEquals(1, change.mapOffset(4), "офсет перед «y» должен вернуться на место")
+        assertEquals(1, change.mapOffset(2), "офсет внутри удалённого — на место удаления")
+        assertEquals(0, change.mapOffset(0))
+        assertEquals(change.versionBefore + 1, change.versionAfter)
+    }
+
+    @Test
+    fun `the earliest change of an undone deletion is found across lines`() {
+        // Стёрли «x», перенос строки и кавычку. Откат возвращает их в обратном
+        // порядке, и последней применяется вставка «x» строкой ниже. Самое раннее
+        // изменение — кавычка в первой строке, а не место последней правки.
+        val document = Document(Rope.of("s = \"\"\"\nxbody"))
+        document.apply(EditTransaction.delete(8, 9), EditKind.Deleting, 0)
+        document.apply(EditTransaction.delete(7, 8), EditKind.Deleting, 0)
+        document.apply(EditTransaction.delete(6, 7), EditKind.Deleting, 0)
+        assertEquals("s = \"\"body", document.text.toString())
+
+        val change = document.undo()!!
+
+        assertEquals("s = \"\"\"\nxbody", document.text.toString())
+        assertEquals(8, change.edits.last().replacements.first().start)
+        assertEquals(6, change.firstChangedOffset())
+    }
+
+    @Test
+    fun `a plain edit is a one-edit change`() {
+        val document = Document(Rope.of("abc"))
+        val change = document.apply(EditTransaction.replace(1, 2, "XY"))!!
+
+        assertEquals(1, change.edits.size)
+        assertEquals(1, change.firstChangedOffset())
+        assertEquals(4, change.mapOffset(3))
+    }
 }
