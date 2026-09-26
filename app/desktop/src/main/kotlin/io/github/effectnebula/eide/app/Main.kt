@@ -89,6 +89,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import java.awt.Rectangle
 import java.awt.Robot
+import java.awt.event.KeyEvent as AwtKeyEvent
 import java.awt.event.InputEvent
 import java.awt.Toolkit
 import java.io.File
@@ -124,6 +125,7 @@ fun main() = application {
             LaunchedEffect(Unit) {
                 delay(SCREENSHOT_SETTLE_MS)
                 Debug.drag?.let { dragMouse(it) }
+                Debug.press?.let { pressKeys(it) }
                 captureScreen(File(path))
                 exitProcess(0)
             }
@@ -623,23 +625,35 @@ private fun RunPanel(
      * «Остановить» — это одно место в списке, и показывать надо ту, которую
      * сейчас можно нажать. Палитра к смене списка готова (её тест на это есть).
      */
-    val commands = remember(handle, showSearch, search != null, onGit != null) {
+    val bindings = remember(handle, search != null, onGit != null) {
         buildList {
-            add(Command("run.toggle", if (handle != null) "Остановить" else "Запустить", "Ctrl+R"))
-            add(Command("file.saveAll", "Сохранить всё", "Ctrl+S"))
-            if (search != null) add(Command("search.find", "Найти в файле", "Ctrl+F"))
-            add(Command("search.project", "Найти в проекте"))
+            val running = handle != null
+            add(
+                Binding(
+                    id = "run.toggle",
+                    title = if (running) "Остановить" else "Запустить",
+                    shortcut = if (running) Keys.Stop else Keys.Run,
+                )
+            )
+            add(Binding("file.saveAll", "Сохранить всё", Keys.SaveAll))
+            if (search != null) add(Binding("search.find", "Найти в файле", Keys.FindInFile))
+            add(Binding("search.project", "Найти в проекте", Keys.FindInProject))
             // Команды нет, если репозитория нет: пункт, который ничего не делает,
             // хуже отсутствующего — по нему жмут и решают, что сломалось.
-            if (onGit != null) add(Command("vcs.status", "Показать git"))
-            add(Command("view.zoomIn", "Увеличить шрифт"))
-            add(Command("view.zoomOut", "Уменьшить шрифт"))
+            if (onGit != null) add(Binding("vcs.status", "Показать git", shortcut = null))
+            add(Binding("view.zoomIn", "Увеличить шрифт", shortcut = null))
+            add(Binding("view.zoomOut", "Уменьшить шрифт", shortcut = null))
         }
     }
 
-    fun runCommand(command: Command) {
+    // Подпись в палитре — из той же таблицы, что и разбор нажатия: соврать негде.
+    val commands = remember(bindings) {
+        bindings.map { Command(it.id, it.title, it.shortcut?.label) }
+    }
+
+    fun runCommand(id: String) {
         showPalette = false
-        when (command.id) {
+        when (id) {
             "run.toggle" -> if (handle != null) handle?.stop() else run()
             "file.saveAll" -> {
                 workspace.saveModified()
@@ -661,19 +675,25 @@ private fun RunPanel(
             // корня доходит только то, что не съели ниже.
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                val command = event.isCtrlPressed || event.isMetaPressed
-                if (command && event.isShiftPressed && event.key == Key.P) {
+
+                if (Keys.Palette.matches(event) || Keys.PaletteAlias.matches(event)) {
                     showPalette = !showPalette
-                    true
-                } else {
-                    false
+                    return@onPreviewKeyEvent true
                 }
+
+                // Пока палитра открыта, её собственные клавиши важнее: стрелки и
+                // Enter должны водить по списку, а не запускать программу.
+                if (showPalette) return@onPreviewKeyEvent false
+
+                val id = commandFor(bindings, event) ?: return@onPreviewKeyEvent false
+                runCommand(id)
+                true
             }
     ) {
         if (showPalette) {
             CommandPalette(
                 commands = commands,
-                onRun = ::runCommand,
+                onRun = { runCommand(it.id) },
                 onDismiss = { showPalette = false },
                 modifier = Modifier.weight(1f),
             )
@@ -806,6 +826,15 @@ private object Debug {
     /** `-Deide.git` — открыть вкладку git. */
     val git: Boolean get() = System.getProperty("eide.git") != null
 
+    /**
+     * `-Deide.press=ctrl+shift+a` — нажать сочетание перед снимком.
+     *
+     * Нужно затем, что таблица раскладки проверяется тестом, а доходит ли
+     * нажатие до обработчика — нет: `KeyEvent` в Compose заворачивает событие
+     * AWT, и собрать его в JVM-тесте значит собрать половину оконной системы.
+     */
+    val press: String? get() = System.getProperty("eide.press")
+
     /** `-Deide.search=что` — открыть поиск с готовым запросом. */
     val search: String? get() = System.getProperty("eide.search")
     val showSearch: Boolean get() = search != null
@@ -883,6 +912,44 @@ private suspend fun dragMouse(path: String) {
         robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK)
         delay(DRAG_SETTLE_MS)
     }.onFailure { System.err.println("не получилось провести мышью: $it") }
+}
+
+/**
+ * Нажимает сочетание клавиш: `ctrl+shift+a`, `shift+f10`, `ctrl+s`.
+ *
+ * Разбирает подпись, а не коды: так строка в командной строке совпадает с тем,
+ * что написано в палитре, и проверять можно ровно обещанное.
+ */
+private suspend fun pressKeys(spec: String) {
+    val parts = spec.lowercase().split('+').map { it.trim() }.filter { it.isNotEmpty() }
+    val key = parts.lastOrNull() ?: return
+
+    val code = when {
+        key.length == 1 -> AwtKeyEvent.getExtendedKeyCodeForChar(key[0].code)
+        key.startsWith("f") && key.drop(1).toIntOrNull() != null ->
+            AwtKeyEvent.VK_F1 + key.drop(1).toInt() - 1
+        else -> AwtKeyEvent.VK_UNDEFINED
+    }
+    if (code == AwtKeyEvent.VK_UNDEFINED) {
+        System.err.println("-Deide.press не разобрал клавишу «$key»")
+        return
+    }
+
+    val modifiers = buildList {
+        if ("ctrl" in parts) add(AwtKeyEvent.VK_CONTROL)
+        if ("shift" in parts) add(AwtKeyEvent.VK_SHIFT)
+        if ("alt" in parts) add(AwtKeyEvent.VK_ALT)
+    }
+
+    runCatching {
+        val robot = Robot()
+        modifiers.forEach { robot.keyPress(it) }
+        robot.keyPress(code)
+        robot.keyRelease(code)
+        // Отпускаем в обратном порядке: так же, как отпускают пальцы.
+        modifiers.asReversed().forEach { robot.keyRelease(it) }
+        delay(DRAG_SETTLE_MS)
+    }.onFailure { System.err.println("не получилось нажать «$spec»: $it") }
 }
 
 private const val DRAG_STEP_MS = 8L

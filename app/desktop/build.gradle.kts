@@ -108,6 +108,7 @@ tasks.withType<JavaExec>().configureEach {
     System.getProperty("eide.projectSearch")?.let { systemProperty("eide.projectSearch", it) }
     System.getProperty("eide.palette")?.let { systemProperty("eide.palette", it) }
     System.getProperty("eide.git")?.let { systemProperty("eide.git", it) }
+    System.getProperty("eide.press")?.let { systemProperty("eide.press", it) }
 
     // Пути к нативной библиотеке и шиму — те же, что у тестов. В собранном
     // дистрибутиве они поедут вместе с приложением; до упаковки графика на
