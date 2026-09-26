@@ -38,6 +38,17 @@ jobs:
         run: |
           sdkmanager "platforms;android-37.2" "build-tools;36.0.0" "ndk;29.0.14206865"
 
+      # Клиент LSP проверяется против настоящего pylsp, а не только подделки:
+      # именно так нашлось, что pylsp считает столбцы в code points, молча
+      # заявляя UTF-16. Без сервера тест пропускается — поэтому здесь он ставится
+      # всегда, и путь передаётся явно: при заданном EIDE_PYLSP пропуск невозможен,
+      # только успех или падение. Версия прибита — урок setup-android выше.
+      - name: pylsp для проверки клиента LSP
+        run: |
+          python3 -m venv "$RUNNER_TEMP/pylsp"
+          "$RUNNER_TEMP/pylsp/bin/pip" install --quiet "python-lsp-server==1.15.0"
+          echo "EIDE_PYLSP=$RUNNER_TEMP/pylsp/bin/pylsp" >> "$GITHUB_ENV"
+
       - name: Gradle
         uses: gradle/actions/setup-gradle@v5
 
