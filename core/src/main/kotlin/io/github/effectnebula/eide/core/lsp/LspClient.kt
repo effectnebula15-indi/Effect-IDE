@@ -13,6 +13,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -20,7 +21,6 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Позиция в терминах LSP: строка и столбец, оба с нуля.
@@ -141,11 +141,15 @@ fun File.toLspUri(): String {
 class LspClient(
     input: InputStream,
     output: OutputStream,
-    private val onDiagnostics: (uri: String, diagnostics: List<Diagnostic>) -> Unit = { _, _ -> },
+    /**
+     * Ошибки файла. [version] — версия документа, для которой они посчитаны,
+     * если сервер её назвал; без неё — к какому тексту они относятся, неизвестно.
+     * Вызывается из читающего потока.
+     */
+    private val onDiagnostics: (uri: String, version: Long?, diagnostics: List<Diagnostic>) -> Unit =
+        { _, _, _ -> },
     onClosed: (reason: String) -> Unit = {},
 ) : AutoCloseable {
-
-    private val versions = ConcurrentHashMap<String, Int>()
 
     /**
      * В чём этот сервер считает столбцы. Известно после [initialize].
@@ -206,7 +210,12 @@ class LspClient(
                     putJsonObject("completion") {
                         putJsonObject("completionItem") { put("snippetSupport", false) }
                     }
-                    putJsonObject("publishDiagnostics") { put("relatedInformation", false) }
+                    putJsonObject("publishDiagnostics") {
+                        put("relatedInformation", false)
+                        // Без версии ошибки нельзя привязать к тексту: пока сервер
+                        // думал, человек мог допечатать, и позиции уже чужие.
+                        put("versionSupport", true)
+                    }
                 }
             }
         }
@@ -216,21 +225,24 @@ class LspClient(
         }
     }
 
-    fun didOpen(uri: String, languageId: String, text: String) {
-        versions[uri] = 1
+    /**
+     * Версии документа задаёт вызывающий, а не клиент: по версии из ответа
+     * (`publishDiagnostics`) надо понять, к какому тексту относятся ошибки, а
+     * это знает только тот, кто держит документ. Версии обязаны расти — по ним
+     * сервер отбрасывает запоздавшие изменения; `Document.version` растёт сам.
+     */
+    fun didOpen(uri: String, languageId: String, text: String, version: Long) {
         rpc.notify("textDocument/didOpen", buildJsonObject {
             putJsonObject("textDocument") {
                 put("uri", uri)
                 put("languageId", languageId)
-                put("version", 1)
+                put("version", version)
                 put("text", text)
             }
         })
     }
 
-    fun didChange(uri: String, text: String) {
-        // Версии обязаны расти: по ним сервер отбрасывает запоздавшие изменения.
-        val version = versions.merge(uri, 1, Int::plus) ?: 1
+    fun didChange(uri: String, text: String, version: Long) {
         rpc.notify("textDocument/didChange", buildJsonObject {
             putJsonObject("textDocument") {
                 put("uri", uri)
@@ -243,7 +255,6 @@ class LspClient(
     }
 
     fun didClose(uri: String) {
-        versions.remove(uri)
         rpc.notify("textDocument/didClose", buildJsonObject {
             putJsonObject("textDocument") { put("uri", uri) }
         })
@@ -298,7 +309,7 @@ class LspClient(
         val body = params as? JsonObject ?: return
         val uri = body["uri"]?.jsonPrimitive?.contentOrNull ?: return
         val list = (body["diagnostics"] as? JsonArray).orEmpty().mapNotNull { parseDiagnostic(it) }
-        onDiagnostics(uri, list)
+        onDiagnostics(uri, (body["version"] as? JsonPrimitive)?.longOrNull, list)
     }
 
     /**

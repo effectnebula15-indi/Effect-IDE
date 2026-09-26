@@ -43,10 +43,12 @@ jobs:
       # заявляя UTF-16. Без сервера тест пропускается — поэтому здесь он ставится
       # всегда, и путь передаётся явно: при заданном EIDE_PYLSP пропуск невозможен,
       # только успех или падение. Версия прибита — урок setup-android выше.
+      # С [pyflakes]: голый python-lsp-server ошибок не присылает вовсе (замерено),
+      # и тест пути ошибки ждал бы их до таймаута. Версию pyflakes задаёт сам pylsp.
       - name: pylsp для проверки клиента LSP
         run: |
           python3 -m venv "$RUNNER_TEMP/pylsp"
-          "$RUNNER_TEMP/pylsp/bin/pip" install --quiet "python-lsp-server==1.15.0"
+          "$RUNNER_TEMP/pylsp/bin/pip" install --quiet "python-lsp-server[pyflakes]==1.15.0"
           echo "EIDE_PYLSP=$RUNNER_TEMP/pylsp/bin/pylsp" >> "$GITHUB_ENV"
 
       - name: Gradle

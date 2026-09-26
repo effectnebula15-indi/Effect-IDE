@@ -11,12 +11,16 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.editor.FoldState
 import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.lsp.DiagnosticMarks
+import io.github.effectnebula.eide.core.lsp.Severity
 import io.github.effectnebula.eide.core.syntax.LineHighlighter
 import io.github.effectnebula.eide.core.syntax.TokenKind
 import io.github.effectnebula.eide.ui.editor.CodeEditor
@@ -24,6 +28,7 @@ import io.github.effectnebula.eide.ui.editor.CompletionSource
 import io.github.effectnebula.eide.ui.editor.EditorColors
 import io.github.effectnebula.eide.ui.editor.GutterMark
 import io.github.effectnebula.eide.ui.editor.observeEditor
+import io.github.effectnebula.eide.ui.editor.rememberDiagnosticsRevision
 import io.github.effectnebula.eide.ui.theme.Eide
 
 /** Размер шрифта по умолчанию. Тот же, что в IntelliJ на десктопе. */
@@ -58,6 +63,8 @@ fun EditorScreen(
     folds: FoldState? = null,
     /** Автодополнение. `null` — его нет: см. [CodeEditor]. */
     completion: CompletionSource? = null,
+    /** Ошибки файла от сервера языка. `null` — сервера нет или язык ему чужой. */
+    diagnostics: DiagnosticMarks? = null,
 ) {
     Column(modifier.fillMaxSize().background(Eide.colors.background)) {
         CodeEditor(
@@ -71,9 +78,10 @@ fun EditorScreen(
             gutterMarks = gutterMarks,
             folds = folds,
             completion = completion,
+            diagnostics = diagnostics,
         )
 
-        StatusBar(state)
+        StatusBar(state, diagnostics)
     }
 }
 
@@ -84,9 +92,10 @@ fun EditorScreen(
  * минуя пересборку.
  */
 @Composable
-private fun StatusBar(state: EditorState) {
+private fun StatusBar(state: EditorState, diagnostics: DiagnosticMarks?) {
     // Чтение ревизии — это и есть подписка: без него строка застынет на месте.
     observeEditor(state)
+    rememberDiagnosticsRevision(diagnostics).longValue
 
     Row(
         Modifier
@@ -103,7 +112,34 @@ private fun StatusBar(state: EditorState) {
         if (state.carets.carets.size > 1) Status("курсоров ${state.carets.carets.size}")
         if (!caret.isEmpty) Status("выделено ${caret.end - caret.start}")
         Status("строк ${state.text.lineCount}")
+
+        if (diagnostics != null) {
+            val errors = diagnostics.count(Severity.Error)
+            val warnings = diagnostics.count(Severity.Warning)
+            if (errors > 0) Status("ошибок $errors", Eide.colors.error)
+            if (warnings > 0) Status("предупреждений $warnings", Eide.colors.warning)
+
+            // Сообщение под курсором, а не во всплывающей подсказке по наведению:
+            // на телефоне наводить нечем, а курсор есть везде.
+            diagnostics.at(caret.head)?.let { mark ->
+                Status(
+                    text = mark.message,
+                    color = severityColor(mark.severity),
+                    modifier = Modifier.weight(1f).testTag(DIAGNOSTIC_MESSAGE_TAG),
+                )
+            }
+        }
     }
+}
+
+/** Метка сообщения об ошибке в строке состояния — для тестов. */
+const val DIAGNOSTIC_MESSAGE_TAG = "diagnostic-message"
+
+@Composable
+private fun severityColor(severity: Severity) = when (severity) {
+    Severity.Error -> Eide.colors.error
+    Severity.Warning -> Eide.colors.warning
+    Severity.Information, Severity.Hint -> Eide.colors.textDim
 }
 
 /** Цвета редактора из темы. Нужны и снаружи — например, ряду клавиш. */
@@ -131,16 +167,27 @@ fun editorColors(): EditorColors = EditorColors(
         TokenKind.Comment to Eide.colors.syntaxComment,
         TokenKind.Declaration to Eide.colors.syntaxFunction,
     ),
+    // Информация и подсказки не подчёркиваются: волна под каждой подсказкой
+    // линтера превращает код в тетрадь с красными чернилами. Их сообщение
+    // всё равно видно в строке состояния, если встать на них курсором.
+    diagnostics = mapOf(
+        Severity.Error to Eide.colors.error,
+        Severity.Warning to Eide.colors.warning,
+    ),
 )
 
 @Composable
-private fun Status(text: String) {
+private fun Status(text: String, color: Color = Eide.colors.textDim, modifier: Modifier = Modifier) {
     BasicText(
         text = text,
+        modifier = modifier,
         style = TextStyle(
-            color = Eide.colors.textDim,
+            color = color,
             fontSize = 11.sp,
             fontFamily = Eide.editorFont,
         ),
+        // Длинное сообщение линтера не должно выталкивать номер строки за край.
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
     )
 }

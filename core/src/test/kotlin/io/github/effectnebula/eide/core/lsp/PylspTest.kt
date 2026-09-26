@@ -1,12 +1,15 @@
 package io.github.effectnebula.eide.core.lsp
 
+import io.github.effectnebula.eide.core.text.EditTransaction
 import io.github.effectnebula.eide.core.text.Rope
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -27,12 +30,21 @@ class PylspTest {
 
     private var process: Process? = null
     private var client: LspClient? = null
+    private var session: LspSession? = null
     private val stderr: File = File.createTempFile("pylsp-", ".log").apply { deleteOnExit() }
+
+    /** «Поток интерфейса» для сессии: редактор и пометки трогаются только в нём. */
+    private val ui = Executors.newSingleThreadExecutor { Thread(it, "ui").apply { isDaemon = true } }
+
+    private fun <T> onUi(block: () -> T): T = ui.submit(block).get(10, TimeUnit.SECONDS)
 
     @AfterTest
     fun cleanup() {
         runCatching { client?.shutdown()?.get(10, TimeUnit.SECONDS) }
         client?.close()
+        runCatching { session?.shutdown()?.get(10, TimeUnit.SECONDS) }
+        session?.close()
+        ui.shutdownNow()
         process?.let {
             if (!it.waitFor(10, TimeUnit.SECONDS)) it.destroyForcibly()
         }
@@ -50,16 +62,20 @@ class PylspTest {
         return null
     }
 
-    /** Запускает сервер и проводит инициализацию. */
-    private fun start(root: File): LspClient {
+    /** Запускает процесс сервера; нет сервера — тест пропущен. */
+    private fun launch(): Process {
         val command = command()
         assumeTrue(command != null, "pylsp не найден: задайте EIDE_PYLSP или поставьте python-lsp-server")
 
         // Поток ошибок уходит в файл, а не в никуда и не в трубу: непрочитанная
         // труба заполняется, и сервер замирает на записи в неё. А файл остаётся,
         // чтобы было что прочесть, если тест упал.
-        val started = ProcessBuilder(command!!).redirectError(stderr).start()
-        process = started
+        return ProcessBuilder(command!!).redirectError(stderr).start().also { process = it }
+    }
+
+    /** Запускает сервер и проводит инициализацию. */
+    private fun start(root: File): LspClient {
+        val started = launch()
         val lsp = LspClient(started.inputStream, started.outputStream)
         client = lsp
 
@@ -77,7 +93,7 @@ class PylspTest {
         val uri = File(root, "main.py").toLspUri()
         val text = Rope.of("import os\nos.pa")
 
-        lsp.didOpen(uri, "python", text.substring(0, text.length))
+        lsp.didOpen(uri, "python", text.substring(0, text.length), version = 1)
         val (_, answer) = lsp.completion(uri, text.toLspPosition(text.length, lsp.positionEncoding))
         val labels = answer.get(60, TimeUnit.SECONDS).map { it.label }
 
@@ -106,7 +122,7 @@ class PylspTest {
         val text = Rope.of("значение_x = 1\n$line")
         val cursor = text.lineStart(1) + line.indexOf("зн") + 2
 
-        lsp.didOpen(uri, "python", text.substring(0, text.length))
+        lsp.didOpen(uri, "python", text.substring(0, text.length), version = 1)
         val (_, answer) = lsp.completion(uri, text.toLspPosition(cursor, lsp.positionEncoding))
         val labels = answer.get(60, TimeUnit.SECONDS).map { it.label }
 
@@ -127,5 +143,55 @@ class PylspTest {
         client = null
 
         assertTrue(process!!.waitFor(30, TimeUnit.SECONDS), "pylsp не вышел после exit; stderr: ${stderr.readText()}")
+    }
+
+    @Test
+    fun `pylsp errors land on their words and leave when fixed`() {
+        // Весь путь ошибки: правка → пауза → didChange → pyflakes → ответ с
+        // версией → поток интерфейса → пометка на нужном слове. Имя файла
+        // кириллицей: адрес уходит с процентами, и вернуться он должен к тому же
+        // файлу, в какой записи его ни верни сервер.
+        val started = launch()
+        val lsp = LspSession(started.inputStream, started.outputStream, ui, syncPauseMs = 100)
+        session = lsp
+        val root = project()
+        lsp.initialize(root).get(60, TimeUnit.SECONDS)
+
+        val state = onUi { testEditor("import os\nx = неизвестное_имя\n") }
+        val marks = onUi { lsp.open(File(root, "проверка.py"), "python", state) }
+
+        val error = waitFor("ошибка про неизвестное имя") {
+            onUi { marks.marks.firstOrNull { it.severity == Severity.Error } }
+        }
+        assertEquals("неизвестное_имя", onUi { state.text.substring(error.start, error.end) })
+
+        val unused = onUi { marks.marks.single { it.severity == Severity.Warning } }
+        assertEquals("import os", onUi { state.text.substring(unused.start, unused.end) })
+
+        // Исправили. Пометка на заменённом слове пропадёт сама, без сервера, —
+        // поэтому ждём другое: предупреждение про `import os`. Правка его не
+        // задевает, и убрать его может только новый ответ pylsp, увидевшего
+        // `os.sep`. Первая редакция теста ждала пропажи ошибки и проходила,
+        // не дождавшись сервера вовсе.
+        onUi { state.replaceAll(EditTransaction.replace(error.start, error.end, "os.sep")) }
+        waitFor("сервер пересчитал ошибки после исправления") {
+            onUi { marks.marks.isEmpty().takeIf { it } }
+        }
+    }
+
+    /**
+     * Ждёт, пока [probe] вернёт не null. Ошибки pylsp присылает через полсекунды
+     * после правки, а первый раз — после разогрева, поэтому ожидание щедрое.
+     */
+    private fun <T : Any> waitFor(what: String, probe: () -> T?): T {
+        val deadline = System.currentTimeMillis() + 60_000
+        while (System.currentTimeMillis() < deadline) {
+            probe()?.let { return it }
+            Thread.sleep(100)
+        }
+        error(
+            "не дождались: $what. Если ошибок нет вовсе — у pylsp нет pyflakes " +
+                "(ставьте python-lsp-server[pyflakes]). stderr: ${stderr.readText()}",
+        )
     }
 }

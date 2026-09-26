@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
@@ -34,6 +35,7 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import java.awt.EventQueue
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.effectnebula.eide.core.exec.KillReason
@@ -204,7 +206,12 @@ private fun DesktopShell() {
     // Сервер языка стартует в фоне: импорт pylsp — около секунды, и холодный
     // старт IDE ждать его не должен. Пока не поднялся, автодополнения просто нет.
     val languageServer by produceState<LanguageServer?>(null) {
-        value = withContext(Dispatchers.IO) { LanguageServer.start(workspaceRoot()) }
+        value = withContext(Dispatchers.IO) {
+            // Поток интерфейса Compose Desktop — поток событий AWT. Не
+            // Dispatchers.Main: без kotlinx-coroutines-swing его здесь нет, и
+            // первая редакция роняла каждый ответ сервера (нашёл самоснимок).
+            LanguageServer.start(workspaceRoot(), EventQueue::invokeLater)
+        }
     }
     DisposableEffect(languageServer) {
         val server = languageServer
@@ -217,6 +224,10 @@ private fun DesktopShell() {
     revision
 
     val active = workspace.active
+
+    // Закрытая вкладка — закрытый у сервера файл. Открывает файл сам показ (см.
+    // LanguageServer.open), а здесь только уборка; сверка дешёвая — список вкладок.
+    languageServer?.let { server -> SideEffect { server.forgetClosed(workspace.files) } }
 
     /*
      * Переключаемся на графику сами, когда программа нарисовала первый кадр.
@@ -736,9 +747,9 @@ private fun RunPanel(
             // Почему автодополнения нет — вслух: Ctrl+Space, который молча ничего
             // не делает, читается как поломка, а не как «не установлен pylsp».
             BasicText(
-                text = languageServer?.let { "автодополнение: ${it.description}" }
+                text = languageServer?.let { "сервер языка: ${it.description}" }
                     ?: LanguageServer.missingReason
-                    ?: "автодополнение: запускается…",
+                    ?: "сервер языка: запускается…",
                 style = TextStyle(color = Eide.colors.textDim, fontSize = 11.sp),
             )
         }
@@ -781,6 +792,9 @@ private fun RunPanel(
                 onFontSizeChange = onFontSizeChange,
                 gutterMarks = marks.value,
                 folds = folds,
+                // Сначала открыть у сервера, потом спрашивать: автодополнение по
+                // файлу, которого сервер не видел, вернёт пустоту.
+                diagnostics = remember(active.state, languageServer) { languageServer?.open(active) },
                 completion = remember(active.file, languageServer) { languageServer?.sourceFor(active.file) },
             )
         } else {

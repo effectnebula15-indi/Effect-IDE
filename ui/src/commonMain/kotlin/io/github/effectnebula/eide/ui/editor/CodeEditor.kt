@@ -39,6 +39,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
@@ -52,12 +53,16 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.effectnebula.eide.core.editor.CaretSet
 import io.github.effectnebula.eide.core.editor.EditorState
 import io.github.effectnebula.eide.core.editor.FoldState
 import io.github.effectnebula.eide.core.editor.IndentFolding
 import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.lsp.DiagnosticMark
+import io.github.effectnebula.eide.core.lsp.DiagnosticMarks
+import io.github.effectnebula.eide.core.lsp.Severity
 import io.github.effectnebula.eide.core.syntax.LineHighlighter
 import io.github.effectnebula.eide.core.syntax.TokenKind
 import io.github.effectnebula.eide.core.text.Rope
@@ -83,6 +88,8 @@ data class EditorColors(
     val vcs: Map<GutterMark, Color> = emptyMap(),
     /** Цвета подсветки синтаксиса по видам кусков. */
     val syntax: Map<TokenKind, Color> = emptyMap(),
+    /** Волна под ошибками. Серьёзности без цвета не подчёркиваются вовсе. */
+    val diagnostics: Map<Severity, Color> = emptyMap(),
 )
 
 /**
@@ -117,6 +124,8 @@ fun CodeEditor(
      * Ctrl+Space ничего не делает: пустой список хуже отсутствующего.
      */
     completion: CompletionSource? = null,
+    /** Ошибки файла от сервера языка. `null` — подчёркивать нечего. */
+    diagnostics: DiagnosticMarks? = null,
     /**
      * Крючок для замеров (P2). В обычной работе null, и ничего связанного с ним
      * не исполняется. Существует ради того, чтобы стенд мерил этот рендер,
@@ -195,6 +204,7 @@ fun CodeEditor(
     var widestLinePx by remember { mutableFloatStateOf(0f) }
 
     val revision = rememberEditorRevision(state)
+    val diagnosticsRevision = rememberDiagnosticsRevision(diagnostics)
 
     // Источник читается свежим на каждое нажатие, а в `remember` не идёт: точка
     // сборки вправе пересоздавать его на каждой пересборке, и ключом он
@@ -401,6 +411,8 @@ fun CodeEditor(
             revision.longValue
             @Suppress("UNUSED_EXPRESSION")
             foldRevision
+            // Ответ сервера перерисовывает холст сам, без правки.
+            diagnosticsRevision.longValue
             widestLinePx = max(
                 widestLinePx,
                 drawEditor(
@@ -419,6 +431,7 @@ fun CodeEditor(
                     gutterMarks = gutterMarks,
                     folds = folding,
                     foldable = { line -> foldsEnabled && IndentFolding.isFoldable(state.text, line) },
+                    marks = diagnostics?.marks.orEmpty(),
                 ),
             )
             probe?.let {
@@ -475,6 +488,10 @@ private const val FOLD_MARKER_SCALE = 0.45f
 private const val FOLD_MARKER_COLUMNS = 0.6f
 private const val DELETED_MARK_HEIGHT_PX = 2f
 
+private val SQUIGGLE_STEP = 2.dp
+private val SQUIGGLE_HEIGHT = 2.dp
+private val SQUIGGLE_STROKE = 1.dp
+
 /**
  * Разделитель ключей кэша: номера строк и текст строк не должны сталкиваться.
  *
@@ -522,6 +539,7 @@ private fun DrawScope.drawEditor(
     gutterMarks: Map<Int, GutterMark>,
     folds: FoldState,
     foldable: (Int) -> Boolean,
+    marks: List<DiagnosticMark>,
 ): Float {
     val text = state.text
     if (metrics.height <= 0f) return 0f
@@ -543,6 +561,16 @@ private fun DrawScope.drawEditor(
             text.lineStart(folds.documentLine(firstVisual, text.lineCount)),
             text.lineEnd(folds.documentLine(lastVisual - 1, text.lineCount)),
         )
+    }
+
+    // Как и совпадения поиска — только то, что задевает экран: иначе каждая
+    // видимая строка перебирала бы все ошибки файла.
+    val visibleMarks = if (marks.isEmpty() || lastVisual <= firstVisual) {
+        emptyList()
+    } else {
+        val from = text.lineStart(folds.documentLine(firstVisual, text.lineCount))
+        val to = text.lineEnd(folds.documentLine(lastVisual - 1, text.lineCount))
+        marks.filter { it.end >= from && it.start <= to }
     }
 
     drawRect(colors.gutterBackground, size = Size(gutterWidth, size.height))
@@ -583,6 +611,10 @@ private fun DrawScope.drawEditor(
                 // Без color: цвета берутся из кусков разметки, а перекрытие сверху
                 // покрасило бы всю строку одинаково.
                 drawText(layout, topLeft = Offset(gutterWidth, top))
+
+                for (mark in visibleMarks) {
+                    drawMark(mark, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
+                }
 
                 if (caretVisible) {
                     drawCarets(state, colors, metrics, gutterWidth, layout, lineStart, lineEnd, top)
@@ -734,6 +766,51 @@ private fun DrawScope.drawRange(
         topLeft = Offset(left, top),
         size = Size((extended - left).coerceAtLeast(1f), metrics.height),
     )
+}
+
+/**
+ * Волна под пересечением ошибки с этой строкой.
+ *
+ * Ширина волны — в dp, а не в пикселях, как у курсора: на телефоне с плотностью
+ * втрое выше пиксельная волна превращается в ровную черту и перестаёт читаться
+ * как «ошибка».
+ */
+private fun DrawScope.drawMark(
+    mark: DiagnosticMark,
+    colors: EditorColors,
+    metrics: LineMetrics,
+    gutterWidth: Float,
+    layout: TextLayoutResult,
+    lineStart: Int,
+    lineEnd: Int,
+    top: Float,
+) {
+    val color = colors.diagnostics[mark.severity] ?: return
+    val from = max(mark.start, lineStart)
+    val to = min(mark.end, lineEnd)
+    // Ошибка, захватившая перенос, кончается в начале следующей строки — там
+    // её нет. Пустая с рождения ошибка «в точке» рисуется, иначе её не увидеть.
+    if (from > to || (from == to && mark.start != mark.end)) return
+
+    val length = layout.layoutInput.text.length
+    val left = gutterWidth + layout.getHorizontalPosition((from - lineStart).coerceIn(0, length), usePrimaryDirection = true)
+    val right = gutterWidth + layout.getHorizontalPosition((to - lineStart).coerceIn(0, length), usePrimaryDirection = true)
+    val width = max(right - left, metrics.digitWidth)
+
+    val step = SQUIGGLE_STEP.toPx()
+    val amplitude = SQUIGGLE_HEIGHT.toPx()
+    val bottom = top + metrics.height - SQUIGGLE_STROKE.toPx()
+    val path = Path().apply {
+        moveTo(left, bottom)
+        var x = left
+        var up = true
+        while (x < left + width) {
+            x = min(x + step, left + width)
+            lineTo(x, if (up) bottom - amplitude else bottom)
+            up = !up
+        }
+    }
+    drawPath(path, color, style = Stroke(width = SQUIGGLE_STROKE.toPx()))
 }
 
 private fun DrawScope.drawCarets(

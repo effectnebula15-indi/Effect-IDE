@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.long
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -27,12 +28,14 @@ import kotlin.test.assertTrue
 class LspClientTest {
 
     private val server = FakeServer()
-    private val diagnostics = CopyOnWriteArrayList<Pair<String, List<Diagnostic>>>()
+    private val diagnostics = CopyOnWriteArrayList<Published>()
+
+    private data class Published(val uri: String, val version: Long?, val list: List<Diagnostic>)
 
     private val client = LspClient(
         input = server.clientInput,
         output = server.clientOutput,
-        onDiagnostics = { uri, list -> diagnostics += uri to list },
+        onDiagnostics = { uri, version, list -> diagnostics += Published(uri, version, list) },
     )
 
     @AfterTest
@@ -175,20 +178,21 @@ class LspClientTest {
     // --- документ --------------------------------------------------------------------
 
     @Test
-    fun `document versions only grow`() {
+    fun `document versions are the caller's, as given`() {
+        // Версия документа, а не счётчик клиента: по ней потом узнаётся, к какому
+        // тексту относятся ошибки. Пропуски — норма: версия растёт и на движении
+        // курсора по откатам, а серверу шлётся не каждая.
         initialized()
-        client.didOpen("file:///a.py", "python", "x = 1")
-        client.didChange("file:///a.py", "x = 2")
-        client.didChange("file:///a.py", "x = 3")
+        client.didOpen("file:///a.py", "python", "x = 1", version = 7)
+        client.didChange("file:///a.py", "x = 2", version = 12)
 
         val open = server.receivedMethod("textDocument/didOpen")
-        val first = server.receivedMethod("textDocument/didChange")
-        val second = server.receivedMethod("textDocument/didChange")
+        val change = server.receivedMethod("textDocument/didChange")
 
         fun version(message: JsonObject) =
-            message["params"]!!.jsonObject["textDocument"]!!.jsonObject["version"]!!.jsonPrimitive.int
+            message["params"]!!.jsonObject["textDocument"]!!.jsonObject["version"]!!.jsonPrimitive.long
 
-        assertEquals(listOf(1, 2, 3), listOf(version(open), version(first), version(second)))
+        assertEquals(listOf(7L, 12L), listOf(version(open), version(change)))
     }
 
     @Test
@@ -196,8 +200,8 @@ class LspClientTest {
         // Событие без `range` означает «заменить всё» при любом режиме сервера —
         // поэтому полная синхронизация корректна всегда.
         initialized()
-        client.didOpen("file:///a.py", "python", "x = 1")
-        client.didChange("file:///a.py", "привет = 2")
+        client.didOpen("file:///a.py", "python", "x = 1", version = 0)
+        client.didChange("file:///a.py", "привет = 2", version = 1)
 
         val change = server.receivedMethod("textDocument/didChange")["params"]!!.jsonObject
             .getValue("contentChanges").jsonArray.single().jsonObject
@@ -264,12 +268,37 @@ class LspClientTest {
         val deadline = System.currentTimeMillis() + 5_000
         while (diagnostics.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
 
-        val (uri, list) = diagnostics.single()
+        val (uri, version, list) = diagnostics.single()
         assertEquals("file:///a.py", uri)
+        assertNull(version, "сервер версию не назвал — значит, её нет")
         assertEquals(Severity.Error, list[0].severity)
         assertEquals("pyflakes", list[0].source)
         // Без указания серьёзности — не ошибка: красное на подсказке пугает зря.
         assertEquals(Severity.Information, list[1].severity)
+    }
+
+    @Test
+    fun `diagnostics carry the version they were computed for`() {
+        initialized()
+
+        server.reply(
+            """{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{
+                "uri":"file:///a.py","version":42,"diagnostics":[]}}""",
+        )
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (diagnostics.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        assertEquals(42L, diagnostics.single().version)
+        assertTrue(diagnostics.single().list.isEmpty(), "пустой список — тоже ответ: ошибок больше нет")
+    }
+
+    @Test
+    fun `the client asks for versioned diagnostics`() {
+        val capabilities = initialized()["params"]!!.jsonObject["capabilities"]!!.jsonObject
+        val publish = capabilities["textDocument"]!!.jsonObject["publishDiagnostics"]!!.jsonObject
+
+        assertEquals(true, publish["versionSupport"]!!.jsonPrimitive.boolean)
     }
 
     // --- позиции ---------------------------------------------------------------------

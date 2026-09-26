@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import io.github.effectnebula.eide.core.editor.EditorListener
 import io.github.effectnebula.eide.core.editor.EditorState
+import io.github.effectnebula.eide.core.lsp.DiagnosticMarks
+import io.github.effectnebula.eide.core.lsp.DiagnosticsListener
 
 /**
  * Ревизия редактора как наблюдаемое значение Compose.
@@ -41,3 +43,23 @@ internal fun rememberEditorRevision(state: EditorState): MutableLongState {
  */
 @Composable
 fun observeEditor(state: EditorState): Long = rememberEditorRevision(state).longValue
+
+/**
+ * Ревизия пометок ошибок — тот же мост, что [rememberEditorRevision].
+ *
+ * Отдельный, потому что пометки меняются и без правки: ответ сервера приходит
+ * через полсекунды после неё, когда редактор уже перерисован и ждёт.
+ */
+@Composable
+internal fun rememberDiagnosticsRevision(marks: DiagnosticMarks?): MutableLongState {
+    val revision = remember(marks) { mutableLongStateOf(marks?.revision ?: 0L) }
+
+    DisposableEffect(marks) {
+        if (marks == null) return@DisposableEffect onDispose { }
+        val listener = DiagnosticsListener { revision.longValue = marks.revision }
+        marks.addListener(listener)
+        onDispose { marks.removeListener(listener) }
+    }
+
+    return revision
+}
