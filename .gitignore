@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+local.properties
+
+# IDE
+.idea/
+*.iml
+.kotlin/
+
+# Native
+native/**/build/
+.cxx/
+*.o
+*.so
+*.dylib
+*.dll
+
+# OS
+.DS_Store
+
+# Локальные настройки Claude Code (машинозависимые)
+.claude/settings.local.json
+
+# Логи падений JVM
+hs_err_pid*.log
+replay_pid*.log
+
+# Кэш байткода Python рядом с шимом графики
+__pycache__/
+*.pyc

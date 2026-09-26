@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+            Раннер живёт в отдельном процессе (ADR-002). Это не оптимизация,
+            а единственный способ надёжно убить зависший код пользователя и
+            пережить segfault в C-расширении, не потеряв несохранённый текст.
+        -->
+        <service
+            android:name=".PythonRunnerService"
+            android:exported="false"
+            android:process=":runner" />
+    </application>
+
+</manifest>

@@ -1,0 +1,1059 @@
+package io.github.effectnebula.eide.app
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowState
+import androidx.compose.ui.window.application
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import java.awt.EventQueue
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import io.github.effectnebula.eide.core.exec.KillReason
+import io.github.effectnebula.eide.core.exec.RunHandle
+import io.github.effectnebula.eide.core.exec.RunLimits
+import io.github.effectnebula.eide.core.exec.RunListener
+import io.github.effectnebula.eide.core.exec.RunSpec
+import io.github.effectnebula.eide.core.lang.Languages
+import io.github.effectnebula.eide.core.editor.FoldState
+import io.github.effectnebula.eide.core.editor.IndentFolding
+import io.github.effectnebula.eide.core.editor.SearchSession
+import io.github.effectnebula.eide.core.syntax.Highlighters
+import io.github.effectnebula.eide.core.project.ProjectTree
+import io.github.effectnebula.eide.core.project.Workspace
+import io.github.effectnebula.eide.platform.desktop.DesktopCanvasArea
+import io.github.effectnebula.eide.platform.desktop.DesktopEnvironment
+import io.github.effectnebula.eide.runner.LocalPythonBackend
+import io.github.effectnebula.eide.platform.desktop.JdkGraphemeBreaker
+import io.github.effectnebula.eide.ui.DEFAULT_FONT_SIZE_SP
+import io.github.effectnebula.eide.ui.EditorScreen
+import io.github.effectnebula.eide.ui.editor.AutoSave
+import io.github.effectnebula.eide.ui.editor.GutterMark
+import io.github.effectnebula.eide.ui.editor.rememberGutterMarks
+import io.github.effectnebula.eide.vcs.FileStatus
+import io.github.effectnebula.eide.vcs.GitIdentity
+import io.github.effectnebula.eide.vcs.GitRepository
+import io.github.effectnebula.eide.vcs.RepositoryStatus
+import io.github.effectnebula.eide.vcs.LineMark
+import io.github.effectnebula.eide.ui.RenderBenchmark
+import io.github.effectnebula.eide.core.command.Command
+import io.github.effectnebula.eide.ui.benchmarkEditor
+import io.github.effectnebula.eide.ui.command.CommandPalette
+import io.github.effectnebula.eide.ui.editor.Breadcrumbs
+import io.github.effectnebula.eide.ui.editor.FONT_STEP_SP
+import io.github.effectnebula.eide.ui.editor.clampFontSize
+import io.github.effectnebula.eide.ui.project.FileTabs
+import io.github.effectnebula.eide.ui.project.FileTreePanel
+import io.github.effectnebula.eide.ui.run.OutputPanel
+import io.github.effectnebula.eide.ui.search.ProjectSearchPanel
+import io.github.effectnebula.eide.ui.vcs.ChangeKind
+import io.github.effectnebula.eide.ui.vcs.ChangedFile
+import io.github.effectnebula.eide.ui.vcs.GitPanel
+import io.github.effectnebula.eide.ui.search.SearchBar
+import io.github.effectnebula.eide.ui.theme.Eide
+import io.github.effectnebula.eide.ui.theme.LocalEditorFont
+import io.github.effectnebula.eide.ui.widgets.NoticeBar
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.runtime.produceState
+import kotlin.concurrent.thread
+import java.awt.Rectangle
+import java.awt.Robot
+import java.awt.event.KeyEvent as AwtKeyEvent
+import java.awt.event.InputEvent
+import java.awt.Toolkit
+import java.io.File
+import javax.imageio.ImageIO
+import kotlin.system.exitProcess
+
+/**
+ * Десктопная сборка: редактор и стенд замеров отрисовки.
+ *
+ * Правило «сначала десктоп, потом Android» существует ровно для того, чтобы
+ * результат было видно без телефона.
+ */
+fun main() = application {
+    // Ошибка окружения, которую иначе замечают только по испорченным именам файлов.
+    DesktopEnvironment.fileNameWarning()?.let { System.err.println("ВНИМАНИЕ: $it") }
+
+    // Прогон без человека: -Deide.benchmarkSeconds=15 печатает счётчики и выходит.
+    val benchmarkSeconds = System.getProperty("eide.benchmarkSeconds")?.toIntOrNull()
+    // Размер шрифта задаётся снаружи, потому что цифры для разных размеров
+    // нужны сравнимые, а нажатие на кнопку в середине прогона сравнимости не даёт.
+    val benchmarkFont = System.getProperty("eide.benchmarkFont")?.toFloatOrNull() ?: 13f
+    val benchmarkHighlight = System.getProperty("eide.benchmarkHighlight") != "false"
+
+    Window(
+        onCloseRequest = ::exitApplication,
+        title = "Effect IDE",
+        state = WindowState(size = DpSize(1100.dp, 720.dp)),
+    ) {
+        // Самоснимок: -Deide.screenshot=/путь.png сохраняет окно и выходит.
+        // Существует потому, что интерфейс пишется вслепую — без этого о нём
+        // можно судить только по тому, что сборка не упала.
+        Debug.screenshot?.let { path ->
+            LaunchedEffect(Unit) {
+                delay(SCREENSHOT_SETTLE_MS)
+                Debug.drag?.let { dragMouse(it) }
+                Debug.press?.let { pressKeys(it) }
+                captureScreen(File(path))
+                exitProcess(0)
+            }
+        }
+
+        CompositionLocalProvider(LocalEditorFont provides remember { jetBrainsMono() }) {
+            if (benchmarkSeconds != null) {
+                BenchmarkOnly(benchmarkSeconds, benchmarkFont, benchmarkHighlight)
+            } else {
+                DesktopShell()
+            }
+        }
+    }
+}
+
+@Composable
+private fun BenchmarkOnly(seconds: Int, fontSizeSp: Float, highlight: Boolean) {
+    val editor = remember { benchmarkEditor(JdkGraphemeBreaker()) }
+    RenderBenchmark(
+        state = editor,
+        initialFontSizeSp = fontSizeSp,
+        initialHighlight = highlight,
+        reporter = { report ->
+            println(
+                "секунда=%d шрифт=%.0f подсветка=%s fps=%.1f худший=%.1fмс просадок=%d/%d разметка=%d/%d".format(
+                    report.second, report.fontSizeSp, if (report.highlighted) "да" else "нет",
+                    report.fps, report.worstFrameMs,
+                    report.jankFrames, report.totalFrames,
+                    report.cacheHits, report.cacheHits + report.cacheMisses,
+                )
+            )
+            if (report.second >= seconds) exitProcess(0)
+        },
+    )
+}
+
+/**
+ * Десктопная оболочка: дерево слева, редактор справа.
+ *
+ * Две колонки, а не одна панель за раз, как на телефоне: здесь ширины хватает,
+ * и прятать дерево значило бы усложнять ровно там, где сложности нет.
+ *
+ * Проект — рабочий каталог, из которого запущено приложение. Выбора папки пока
+ * нет: диалог — платформенная штука, а пользы от него на этом этапе меньше,
+ * чем от возможности сразу увидеть настоящее дерево.
+ */
+@Composable
+private fun DesktopShell() {
+    var showBenchmark by remember { mutableStateOf(false) }
+    var showProjectSearch by remember { mutableStateOf(Debug.projectSearch != null) }
+    var showGit by remember { mutableStateOf(Debug.git) }
+    var showCanvas by remember { mutableStateOf(Debug.showCanvas) }
+
+    // Взводится на Run и снимается первым же показом — как на Android и по той
+    // же причине: иначе уйти с вкладки графики при работающей программе нельзя,
+    // следующий кадр вернёт обратно.
+    var awaitingFirstFrame by remember { mutableStateOf(false) }
+
+    // Область кадров переживает несколько запусков: раннер одноразовый, а канва
+    // — нет. Создаётся один раз на всё приложение.
+    val canvas = remember { runCatching { DesktopCanvasArea.create() }.getOrNull() }
+    DisposableEffect(canvas) { onDispose { canvas?.close() } }
+
+    // Репозиторий открывается один раз на проект. Его отсутствие — обычное дело,
+    // а не ошибка: папка вполне может не быть репозиторием.
+    val git = remember { runCatching { GitRepository.open(workspaceRoot()) }.getOrNull() }
+    DisposableEffect(git) { onDispose { git?.close() } }
+
+    val startup = remember { startWorkspace() }
+    val workspace = startup.workspace
+
+    // Сервер языка стартует в фоне: импорт pylsp — около секунды, и холодный
+    // старт IDE ждать его не должен. Пока не поднялся, автодополнения просто нет.
+    val languageServer by produceState<LanguageServer?>(null) {
+        value = withContext(Dispatchers.IO) {
+            // Поток интерфейса Compose Desktop — поток событий AWT. Не
+            // Dispatchers.Main: без kotlinx-coroutines-swing его здесь нет, и
+            // первая редакция роняла каждый ответ сервера (нашёл самоснимок).
+            LanguageServer.start(workspaceRoot(), EventQueue::invokeLater)
+        }
+    }
+    DisposableEffect(languageServer) {
+        val server = languageServer
+        onDispose { server?.let { thread(name = "pylsp-shutdown") { it.close() } } }
+    }
+    var notice by remember { mutableStateOf(startup.failure) }
+    var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE_SP) }
+    var revision by remember { mutableStateOf(0) }
+    @Suppress("UNUSED_EXPRESSION")
+    revision
+
+    val active = workspace.active
+
+    // Закрытая вкладка — закрытый у сервера файл. Открывает файл сам показ (см.
+    // LanguageServer.open), а здесь только уборка; сверка дешёвая — список вкладок.
+    languageServer?.let { server -> SideEffect { server.forgetClosed(workspace.files) } }
+
+    /*
+     * Переключаемся на графику сами, когда программа нарисовала первый кадр.
+     * Заранее знать, графическая ли она, нельзя, а заставлять жать вторую
+     * кнопку после Run — значит, что первый запуск выглядит как «ничего не
+     * произошло». Проверка дешёвая: номер кадра читается без копирования.
+     */
+    LaunchedEffect(canvas, awaitingFirstFrame) {
+        if (canvas == null || !awaitingFirstFrame) return@LaunchedEffect
+        val before = canvas.latestFrame()
+        while (true) {
+            withFrameNanos { }
+            if (canvas.latestFrame() > before) {
+                awaitingFirstFrame = false
+                showCanvas = true
+                return@LaunchedEffect
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(Eide.colors.background)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Eide.colors.border)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Tab("редактор", !showBenchmark && !showCanvas && !showProjectSearch && !showGit) {
+                showBenchmark = false
+                showCanvas = false
+                showProjectSearch = false
+                showGit = false
+            }
+            if (canvas != null) {
+                Tab("графика", showCanvas) { showCanvas = true }
+            }
+            Tab("отрисовка · P2", showBenchmark) {
+                showBenchmark = true
+                showCanvas = false
+                showProjectSearch = false
+                showGit = false
+            }
+            Tab("поиск по проекту", showProjectSearch) {
+                showProjectSearch = true
+                showBenchmark = false
+                showCanvas = false
+                showGit = false
+            }
+            if (git != null) {
+                Tab("git", showGit) {
+                    showGit = true
+                    showProjectSearch = false
+                    showBenchmark = false
+                    showCanvas = false
+                }
+            }
+        }
+
+        if (showGit && git != null) {
+            GitTab(
+                git = git,
+                onOpen = { file ->
+                    workspace.saveModified()
+                    notice = runCatching { workspace.open(file) }
+                        .fold({ null }, { "не открылся ${file.name}: ${it.message}" })
+                    showGit = false
+                    revision++
+                },
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
+        }
+
+        if (showProjectSearch) {
+            ProjectSearchPanel(
+                tree = workspace.tree,
+                initialPattern = Debug.projectSearch.orEmpty(),
+                workspace = workspace,
+                onOpen = { match ->
+                    workspace.saveModified()
+                    // Арифметика позиции — в `Workspace.openAt`: она же нужна на
+                    // Android, а разъехавшиеся копии одного расчёта этот проект
+                    // уже проходил на попадании пальцем в знак.
+                    notice = runCatching { workspace.openAt(match.file, match.line, match.column) }
+                        .fold({ null }, { "не открылся ${match.file.name}: ${it.message}" })
+                    showProjectSearch = false
+                    revision++
+                },
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
+        }
+
+        if (showBenchmark) {
+            val editor = remember { benchmarkEditor(JdkGraphemeBreaker()) }
+            RenderBenchmark(editor, Modifier.weight(1f))
+            return@Column
+        }
+
+        if (showCanvas && canvas != null) {
+            CanvasView(canvas, Modifier.weight(1f))
+            return@Column
+        }
+
+        Row(Modifier.weight(1f)) {
+            Box(Modifier.width(TREE_WIDTH)) {
+                FileTreePanel(
+                    tree = workspace.tree,
+                    selected = active?.file,
+                    onOpen = { file ->
+                        workspace.saveModified()
+                        // Файл мог исчезнуть между тем, как дерево его показало,
+                        // и тем, как по нему щёлкнули. Исключение отсюда уходит
+                        // в обработчик события Compose и роняет приложение.
+                        notice = runCatching { workspace.open(file) }
+                            .fold({ null }, { "не открылся ${file.name}: ${it.message}" })
+                        revision++
+                    },
+                )
+            }
+
+            Column(Modifier.weight(1f)) {
+                FileTabs(
+                    files = workspace.files,
+                    active = active,
+                    onSelect = { workspace.activate(it.file); revision++ },
+                    onClose = { workspace.saveModified(); workspace.close(it.file); revision++ },
+                )
+
+                notice?.let { NoticeBar(it) }
+
+                RunPanel(
+                    workspace = workspace,
+                    active = active,
+                    canvas = canvas,
+                    git = git,
+                    fontSizeSp = fontSize,
+                    onFontSizeChange = { fontSize = it },
+                    onRunStarted = { awaitingFirstFrame = true },
+                    onProjectSearch = { showProjectSearch = true },
+                    onGit = git?.let { { showGit = true } },
+                    languageServer = languageServer,
+                    onChanged = { revision++ },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Вкладка git: статус репозитория и коммит.
+ *
+ * Вся работа с репозиторием — в фоне: `status()` это обход рабочей копии, а
+ * `commit()` — запись в хранилище. На главном потоке им делать нечего, и панель
+ * сама ничего не считает (разбор — в `ui-git.md`).
+ */
+@Composable
+private fun GitTab(git: GitRepository, onOpen: (File) -> Unit, modifier: Modifier = Modifier) {
+    var status by remember { mutableStateOf<RepositoryStatus?>(null) }
+    var identity by remember { mutableStateOf<GitIdentity?>(null) }
+    var busy by remember { mutableStateOf(true) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var refreshes by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(git, refreshes) {
+        busy = true
+        withContext(Dispatchers.IO) {
+            val read = runCatching { git.status() to git.identity() }.getOrNull()
+            status = read?.first
+            identity = read?.second
+        }
+        busy = false
+    }
+
+    GitPanel(
+        branch = status?.branch,
+        files = status?.files.orEmpty().map { (path, state) -> ChangedFile(path, state.toChangeKind()) },
+        identity = identity?.let { "${it.name} <${it.email}>" },
+        busy = busy,
+        notice = notice,
+        onRefresh = {
+            notice = null
+            refreshes++
+        },
+        onCommit = { message ->
+            val who = identity
+            if (who == null) {
+                notice = "не задан автор"
+            } else {
+                busy = true
+                scope.launch {
+                    notice = withContext(Dispatchers.IO) {
+                        runCatching {
+                            git.stageAll()
+                            git.commit(message, who.name, who.email)
+                        }.fold(
+                            { result ->
+                                // Про непоставленную подпись молчать нельзя: в репозитории
+                                // с обязательной подписью такой коммит отклонят на сервере,
+                                // и узнать об этом лучше здесь (ADR-006).
+                                val signed = if (result.signingRequested) {
+                                    ", но подпись просили, а JGit её не ставит"
+                                } else {
+                                    ""
+                                }
+                                "коммит ${result.id.take(SHORT_ID_LENGTH)}$signed"
+                            },
+                            { "не закоммитилось: ${it.message}" },
+                        )
+                    }
+                    busy = false
+                    refreshes++
+                }
+            }
+        },
+        onOpen = { onOpen(File(git.workTree, it.path)) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * Перевод статуса файла из `:vcs` в то, что понимает `:ui`.
+ *
+ * Два одинаковых перечня в разных модулях — цена границы: `:ui` не имеет права
+ * зависеть от `:vcs` (проверяется `checkArchitecture`), а знать про git ей и
+ * незачем — она рисует буквы и пути. Перевод живёт в точке сборки, как и перевод
+ * пометок гаттера.
+ */
+private fun FileStatus.toChangeKind(): ChangeKind = when (this) {
+    FileStatus.Untracked -> ChangeKind.Untracked
+    FileStatus.Added -> ChangeKind.Added
+    FileStatus.Modified -> ChangeKind.Modified
+    FileStatus.Deleted -> ChangeKind.Deleted
+    FileStatus.Conflicted -> ChangeKind.Conflicted
+}
+
+/** Сколько знаков хеша показывать: столько же, сколько `git log --oneline`. */
+private const val SHORT_ID_LENGTH = 7
+
+/** Корень проекта: то же, что видит дерево файлов. */
+private fun workspaceRoot(): File = File(Debug.project ?: System.getProperty("user.dir"))
+
+/**
+ * Перевод пометок git в пометки редактора, или null если репозитория нет.
+ *
+ * Здесь же граница модулей: `:ui` про git не знает, `:vcs` — про редактор.
+ * Точка сборки знает про оба, и это её работа (ADR-006).
+ *
+ * Считается в фоновом потоке: сравнение с HEAD — это чтение объекта из
+ * хранилища и дифф, и на главном потоке ему делать нечего.
+ */
+private fun gitMarks(git: GitRepository?, file: File): (suspend (String) -> Map<Int, GutterMark>)? {
+    if (git == null) return null
+    val path = runCatching { file.relativeTo(git.workTree).invariantSeparatorsPath }.getOrNull()
+        ?: return null
+
+    return { text ->
+        withContext(Dispatchers.IO) {
+            runCatching { git.gutterMarks(path, text) }.getOrDefault(emptyMap()).mapValues { (_, mark) ->
+                when (mark) {
+                    LineMark.Added -> GutterMark.Added
+                    LineMark.Modified -> GutterMark.Modified
+                    LineMark.DeletedBelow -> GutterMark.DeletedBelow
+                }
+            }
+        }
+    }
+}
+
+/** Что получилось поднять на старте: проект и, если не вышло, причина. */
+private class Startup(val workspace: Workspace, val failure: String?)
+
+/**
+ * Поднимает проект и открывает файл из `-Deide.open`, если он задан.
+ *
+ * Исключение отсюда стоило бы дорого: `remember` пересчитывается на каждой
+ * попытке композиции, а композиция после броска повторяется — приложение
+ * зависает молча, без окна и без сообщения. Диагностировать это по симптому
+ * «gradle run не завершается» — час работы, так что причина ловится здесь.
+ */
+private fun startWorkspace(): Startup {
+    // -Deide.project=/путь открывает чужую папку; по умолчанию — та, из
+    // которой запущено приложение.
+    val root = File(Debug.project ?: System.getProperty("user.dir"))
+    val workspace = Workspace(ProjectTree(root), JdkGraphemeBreaker())
+
+    // -Deide.open=путь открывает файл на старте. Нужно для самоснимка:
+    // иначе увидеть редактор с вкладками можно только руками.
+    val argument = Debug.open ?: return Startup(workspace, null)
+    val target = openTarget(root, argument)
+
+    return runCatching { workspace.open(target) }.fold(
+        { Startup(workspace, null) },
+        { Startup(workspace, "не открылся ${target.path}: ${it.message}") },
+    )
+}
+
+/**
+ * Куда показывает `-Deide.open`.
+ *
+ * Абсолютный путь остаётся собой: `File(root, absolute)` в Java склеивает их
+ * в бессмыслицу вроде `/проект/tmp/файл.py`, и файл «не находится» по пути,
+ * который в командной строке написан верно.
+ */
+internal fun openTarget(root: File, argument: String): File {
+    val given = File(argument)
+    return if (given.isAbsolute) given else File(root, argument)
+}
+
+/**
+ * Редактор с запуском и панелью вывода.
+ *
+ * На десктопе интерпретатор — обычная программа, поэтому граница процессов уже
+ * есть и городить свой раннер незачем. Обещания при этом те же, что на телефоне:
+ * Stop останавливает всегда, зависшую программу снимает сторож.
+ */
+@Composable
+private fun RunPanel(
+    workspace: Workspace,
+    active: io.github.effectnebula.eide.core.project.OpenFile?,
+    canvas: DesktopCanvasArea?,
+    git: GitRepository?,
+    fontSizeSp: Float,
+    onFontSizeChange: (Float) -> Unit,
+    onRunStarted: () -> Unit,
+    onProjectSearch: () -> Unit,
+    onGit: (() -> Unit)?,
+    languageServer: LanguageServer?,
+    onChanged: () -> Unit,
+) {
+    var output by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("готов") }
+    var handle by remember { mutableStateOf<RunHandle?>(null) }
+    val scope = rememberCoroutineScope()
+    var autoRun by remember { mutableStateOf(Debug.autoRun) }
+
+    // Сессия поиска живёт вместе с файлом: закрыли файл — забыли запрос.
+    val search = active?.let { file ->
+        remember(file) {
+            SearchSession(file.state).apply {
+                Debug.search?.let { setQuery(io.github.effectnebula.eide.core.editor.SearchQuery(it)) }
+            }
+        }
+    }
+    var showSearch by remember(active) { mutableStateOf(Debug.showSearch) }
+
+    fun onMain(action: () -> Unit) {
+        // Слушатель зовут из фоновых потоков бэкенда. Складывать строки вывода
+        // из нескольких потоков без переноса в один — верный способ потерять
+        // часть текста.
+        scope.launch { action() }
+    }
+
+    fun run() {
+        val target = active ?: return
+        workspace.saveModified()
+        onChanged()
+        onRunStarted()
+
+        output = ""
+        status = "запускаю…"
+        val startedAt = System.currentTimeMillis()
+
+        handle = LocalPythonBackend().run(
+            RunSpec(
+                script = target.file,
+                workDir = workspace.tree.root,
+                limits = RunLimits(timeoutMillis = 30_000, maxResidentBytes = 512L * 1024 * 1024),
+                // Шим и библиотеку программа находит через окружение: знать,
+                // что означают эти переменные, бэкенду не нужно.
+                environment = buildMap {
+                    canvas?.let { putAll(it.environment(Debug.canvasLibrary)) }
+                    Debug.shimDirectory?.let { put("PYTHONPATH", it) }
+                },
+            ),
+            object : RunListener {
+                override fun onStarted(pid: Int) = onMain { status = "работает, процесс $pid" }
+                override fun onStdout(chunk: String) = onMain { output += chunk }
+                override fun onStderr(chunk: String) = onMain { output += chunk }
+
+                override fun onExit(code: Int) = onMain {
+                    output += "\n[код $code за ${System.currentTimeMillis() - startedAt} мс]\n"
+                    status = "готов"
+                    handle = null
+                }
+
+                override fun onKilled(reason: KillReason) = onMain {
+                    val why = when (reason) {
+                        KillReason.ByUser -> "остановлена вручную"
+                        KillReason.Timeout -> "снята по таймауту"
+                        KillReason.Memory -> "снята по пределу памяти"
+                    }
+                    output += "\n[$why через ${System.currentTimeMillis() - startedAt} мс]\n"
+                    status = "готов"
+                    handle = null
+                }
+
+                override fun onFailure(error: Throwable) = onMain {
+                    output += "\n[запустить не удалось: $error]\n"
+                    status = "готов"
+                    handle = null
+                }
+            },
+        )
+    }
+
+    // Автозапуск для самопроверки: нажать Run самому я не могу, а увидеть, что
+    // путь от кнопки до вывода работает, надо.
+    if (autoRun && active != null) {
+        LaunchedEffect(active) {
+            autoRun = false
+            run()
+        }
+    }
+
+    var showPalette by remember { mutableStateOf(Debug.palette) }
+
+    /*
+     * Список команд пересобирается на каждое изменение состояния: «Запустить» и
+     * «Остановить» — это одно место в списке, и показывать надо ту, которую
+     * сейчас можно нажать. Палитра к смене списка готова (её тест на это есть).
+     */
+    val bindings = remember(handle, search != null, onGit != null) {
+        buildList {
+            val running = handle != null
+            add(
+                Binding(
+                    id = "run.toggle",
+                    title = if (running) "Остановить" else "Запустить",
+                    shortcut = if (running) Keys.Stop else Keys.Run,
+                )
+            )
+            add(Binding("file.saveAll", "Сохранить всё", Keys.SaveAll))
+            if (search != null) add(Binding("search.find", "Найти в файле", Keys.FindInFile))
+            add(Binding("search.project", "Найти в проекте", Keys.FindInProject))
+            // Команды нет, если репозитория нет: пункт, который ничего не делает,
+            // хуже отсутствующего — по нему жмут и решают, что сломалось.
+            if (onGit != null) add(Binding("vcs.status", "Показать git", shortcut = null))
+            add(Binding("view.zoomIn", "Увеличить шрифт", shortcut = null))
+            add(Binding("view.zoomOut", "Уменьшить шрифт", shortcut = null))
+        }
+    }
+
+    // Подпись в палитре — из той же таблицы, что и разбор нажатия: соврать негде.
+    val commands = remember(bindings) {
+        bindings.map { Command(it.id, it.title, it.shortcut?.label) }
+    }
+
+    fun runCommand(id: String) {
+        showPalette = false
+        when (id) {
+            "run.toggle" -> if (handle != null) handle?.stop() else run()
+            "file.saveAll" -> {
+                workspace.saveModified()
+                onChanged()
+            }
+            "search.find" -> showSearch = true
+            "search.project" -> onProjectSearch()
+            "vcs.status" -> onGit?.invoke()
+            "view.zoomIn" -> onFontSizeChange(clampFontSize(fontSizeSp + FONT_STEP_SP))
+            "view.zoomOut" -> onFontSizeChange(clampFontSize(fontSizeSp - FONT_STEP_SP))
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            // Перехват до редактора: иначе сочетание уйдёт в текст. Preview
+            // работает сверху вниз, обычный onKeyEvent — снизу вверх, и до
+            // корня доходит только то, что не съели ниже.
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+                if (Keys.Palette.matches(event) || Keys.PaletteAlias.matches(event)) {
+                    showPalette = !showPalette
+                    return@onPreviewKeyEvent true
+                }
+
+                // Пока палитра открыта, её собственные клавиши важнее: стрелки и
+                // Enter должны водить по списку, а не запускать программу.
+                if (showPalette) return@onPreviewKeyEvent false
+
+                val id = commandFor(bindings, event) ?: return@onPreviewKeyEvent false
+                runCommand(id)
+                true
+            }
+    ) {
+        if (showPalette) {
+            CommandPalette(
+                commands = commands,
+                onRun = { runCommand(it.id) },
+                onDismiss = { showPalette = false },
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
+        }
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Eide.colors.panel)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val running = handle != null
+            Tab(if (running) "Stop" else "Run", selected = true) {
+                if (running) handle?.stop() else run()
+            }
+            if (search != null) {
+                Tab("Найти", showSearch) { showSearch = !showSearch }
+            }
+            Tab("Команды", showPalette) { showPalette = true }
+            BasicText(status, style = TextStyle(color = Eide.colors.textDim, fontSize = 12.sp))
+            // Почему автодополнения нет — вслух: Ctrl+Space, который молча ничего
+            // не делает, читается как поломка, а не как «не установлен pylsp».
+            BasicText(
+                text = languageServer?.let { "сервер языка: ${it.description}" }
+                    ?: LanguageServer.missingReason
+                    ?: "сервер языка: запускается…",
+                style = TextStyle(color = Eide.colors.textDim, fontSize = 11.sp),
+            )
+        }
+
+        if (showSearch && search != null) {
+            SearchBar(
+                session = search,
+                onClose = { showSearch = false },
+                onChanged = onChanged,
+            )
+        }
+
+        if (active != null) {
+            val marks = rememberGutterMarks(active.state, compute = gitMarks(git, active.file))
+            // Своя свёртка на файл: свёрнутое переживает переключение вкладок.
+            val folds = remember(active.file) {
+                FoldState().apply {
+                    Debug.fold?.let { line ->
+                        IndentFolding.regionAt(active.state.text, line - 1)?.let { fold(it) }
+                    }
+                }
+            }
+
+            // То же автосохранение, что на телефоне. Десктоп не убивают внезапно,
+            // но правило «сначала десктоп» тут было нарушено: поведение писалось
+            // и проверялось на Android, а увидеть его можно только здесь.
+            AutoSave(active.state) {
+                withContext(Dispatchers.IO) { workspace.save(active) }
+                onChanged()
+            }
+
+            Breadcrumbs(active.state, Languages.forFile(active.name).outline)
+
+            EditorScreen(
+                active.state,
+                Modifier.weight(1f),
+                search = search,
+                highlighter = Highlighters.forFile(active.name),
+                fontSizeSp = fontSizeSp,
+                onFontSizeChange = onFontSizeChange,
+                gutterMarks = marks.value,
+                folds = folds,
+                // Сначала открыть у сервера, потом спрашивать: автодополнение по
+                // файлу, которого сервер не видел, вернёт пустоту.
+                diagnostics = remember(active.state, languageServer) { languageServer?.open(active) },
+                completion = remember(active.file, languageServer) { languageServer?.sourceFor(active.file) },
+            )
+        } else {
+            Box(Modifier.weight(1f).padding(16.dp)) {
+                BasicText(
+                    "выберите файл в дереве слева",
+                    style = TextStyle(color = Eide.colors.textDim, fontSize = 13.sp),
+                )
+            }
+        }
+
+        OutputPanel(output, Modifier.fillMaxWidth().weight(OUTPUT_WEIGHT))
+    }
+}
+
+/** Ширина колонки дерева: помещается путь средней длины, но не съедает редактор. */
+private val TREE_WIDTH = 280.dp
+
+/** Доля высоты под вывод: видно десяток строк, но редактор остаётся главным. */
+private const val OUTPUT_WEIGHT = 0.35f
+
+/**
+ * Отладочные ключи десктопной сборки.
+ *
+ * Существуют потому, что интерфейс пишется без возможности его увидеть и
+ * потрогать: снимок экрана и автозапуск — единственный способ проверить, что
+ * путь от кнопки до вывода работает, а не только компилируется. В обычном
+ * запуске ни один из них не задан, и приложение ведёт себя как обычно.
+ */
+private object Debug {
+    /** `-Deide.screenshot=/путь.png` — снять экран и выйти. */
+    val screenshot: String? get() = System.getProperty("eide.screenshot")
+
+    /** `-Deide.project=/путь` — что считать проектом. */
+    val project: String? get() = System.getProperty("eide.project")
+
+    /** `-Deide.open=путь` — открыть файл на старте. */
+    val open: String? get() = System.getProperty("eide.open")
+
+    /** `-Deide.run` — запустить открытый файл сразу. */
+    val autoRun: Boolean get() = System.getProperty("eide.run") != null
+
+    /** `-Deide.canvas` — открыть вкладку графики сразу. */
+    val showCanvas: Boolean get() = System.getProperty("eide.canvas") != null
+
+    /**
+     * `-Deide.fold=7` — свернуть блок, начинающийся на этой строке (нумерация
+     * как в гаттере, с единицы).
+     *
+     * Существует по той же причине, что и остальные отладочные ключи: свёрнутый
+     * экран иначе не увидеть — самоснимок не умеет нажимать на треугольник.
+     */
+    val fold: Int? get() = System.getProperty("eide.fold")?.toIntOrNull()
+
+    /**
+     * `-Deide.drag=x1,y1,x2,y2` — провести мышью по экрану перед снимком.
+     *
+     * Единственный способ проверить путь ввода целиком, не имея рук: события
+     * идут через настоящий X-сервер, Compose, кольцо в разделяемой памяти и
+     * программу на Python — и возвращаются нарисованными.
+     */
+    val drag: String? get() = System.getProperty("eide.drag")
+
+    /** `-Deide.projectSearch=что` — открыть поиск по проекту с готовым запросом. */
+    val projectSearch: String? get() = System.getProperty("eide.projectSearch")
+
+    /** `-Deide.palette` — открыть палитру команд. Нужно самоснимку: её не набрать. */
+    val palette: Boolean get() = System.getProperty("eide.palette") != null
+
+    /** `-Deide.git` — открыть вкладку git. */
+    val git: Boolean get() = System.getProperty("eide.git") != null
+
+    /**
+     * `-Deide.press=ctrl+shift+a` — нажать сочетание перед снимком.
+     *
+     * Нужно затем, что таблица раскладки проверяется тестом, а доходит ли
+     * нажатие до обработчика — нет: `KeyEvent` в Compose заворачивает событие
+     * AWT, и собрать его в JVM-тесте значит собрать половину оконной системы.
+     */
+    val press: String? get() = System.getProperty("eide.press")
+
+    /** `-Deide.search=что` — открыть поиск с готовым запросом. */
+    val search: String? get() = System.getProperty("eide.search")
+    val showSearch: Boolean get() = search != null
+
+    /**
+     * Где лежит libeide_canvas.so и шим на Python.
+     *
+     * Пока задаются снаружи: в собранном дистрибутиве они поедут вместе с
+     * приложением, и это отдельная работа по упаковке нативных библиотек под
+     * три системы (риск R6 в плане). До неё графика на десктопе работает при
+     * запуске из исходников.
+     */
+    val canvasLibrary: String? get() = System.getProperty("eide.canvasLib") ?: bundled(LIBRARY_NAMES)
+    val shimDirectory: String? get() = System.getProperty("eide.shimDir") ?: bundled(listOf("python"))
+
+    /**
+     * Где лежат ресурсы в собранном дистрибутиве.
+     *
+     * `compose.application.resources.dir` выставляет сам рантайм Compose при
+     * запуске упакованного приложения. При запуске из исходников свойства нет,
+     * и путь приходит из Gradle — поэтому сперва спрашиваются ключи `-D`.
+     */
+    private fun bundled(names: List<String>): String? {
+        val root = System.getProperty("compose.application.resources.dir") ?: return null
+        return names.asSequence()
+            .map { File(root, it) }
+            .firstOrNull { it.exists() }
+            ?.absolutePath
+    }
+
+    /** Имя библиотеки зависит от системы, а перебрать три варианта дешевле, чем угадывать. */
+    private val LIBRARY_NAMES = listOf("libeide_canvas.so", "libeide_canvas.dylib", "eide_canvas.dll")
+}
+
+/**
+ * Пауза перед снимком: первый кадр Compose рисует не сразу, а под программной
+ * растеризацией — тем более. Снимок пустого окна выглядел бы как поломка вёрстки.
+ */
+private const val SCREENSHOT_SETTLE_MS = 2_500L
+
+/**
+ * Снимок всего экрана, а не окна.
+ *
+ * Координаты окна под виртуальным X-сервером приходят нулевыми, хотя рисуется
+ * оно со смещением: снимок по ним съезжает и режет край. Экран целиком не
+ * съезжает никогда.
+ */
+/**
+ * Проводит мышью от одной точки к другой с нажатой кнопкой.
+ *
+ * Промежуточные точки обязательны: без них программа получит нажатие и
+ * отпускание, но ни одного движения, а проверить надо как раз движение.
+ */
+private suspend fun dragMouse(path: String) {
+    val numbers = path.split(',').mapNotNull { it.trim().toIntOrNull() }
+    if (numbers.size != 4) {
+        System.err.println("-Deide.drag ждёт четыре числа: x1,y1,x2,y2")
+        return
+    }
+
+    runCatching {
+        val robot = Robot()
+        val (x1, y1, x2, y2) = numbers
+        robot.mouseMove(x1, y1)
+        robot.mousePress(InputEvent.BUTTON1_DOWN_MASK)
+
+        val steps = 40
+        for (step in 1..steps) {
+            robot.mouseMove(
+                x1 + (x2 - x1) * step / steps,
+                y1 + (y2 - y1) * step / steps,
+            )
+            delay(DRAG_STEP_MS)
+        }
+        robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK)
+        delay(DRAG_SETTLE_MS)
+    }.onFailure { System.err.println("не получилось провести мышью: $it") }
+}
+
+/**
+ * Нажимает сочетание клавиш: `ctrl+shift+a`, `shift+f10`, `ctrl+s`.
+ *
+ * Разбирает подпись, а не коды: так строка в командной строке совпадает с тем,
+ * что написано в палитре, и проверять можно ровно обещанное.
+ */
+private suspend fun pressKeys(spec: String) {
+    // Несколько сочетаний через пробел: «end enter» — поставить курсор в конец
+    // строки и перевести строку. Проверять отступ иначе нечем: он появляется
+    // только от настоящего нажатия.
+    for (chord in spec.split(' ').filter { it.isNotBlank() }) {
+        // «wait» — пауза, а не клавиша: ответ сервера языка приходит не сразу,
+        // первый — через секунду-другую, пока прогревается jedi.
+        if (chord == "wait") delay(WAIT_MS) else pressChord(chord)
+    }
+}
+
+private suspend fun pressChord(chord: String) {
+    val parts = chord.lowercase().split('+').map { it.trim() }.filter { it.isNotEmpty() }
+    val key = parts.lastOrNull() ?: return
+
+    val code = when {
+        key.length == 1 -> AwtKeyEvent.getExtendedKeyCodeForChar(key[0].code)
+        key.startsWith("f") && key.drop(1).toIntOrNull() != null ->
+            AwtKeyEvent.VK_F1 + key.drop(1).toInt() - 1
+        else -> NAMED_KEYS[key] ?: AwtKeyEvent.VK_UNDEFINED
+    }
+    if (code == AwtKeyEvent.VK_UNDEFINED) {
+        System.err.println("-Deide.press не разобрал клавишу «$key»")
+        return
+    }
+
+    val modifiers = buildList {
+        if ("ctrl" in parts) add(AwtKeyEvent.VK_CONTROL)
+        if ("shift" in parts) add(AwtKeyEvent.VK_SHIFT)
+        if ("alt" in parts) add(AwtKeyEvent.VK_ALT)
+    }
+
+    runCatching {
+        val robot = Robot()
+        modifiers.forEach { robot.keyPress(it) }
+        robot.keyPress(code)
+        robot.keyRelease(code)
+        // Отпускаем в обратном порядке: так же, как отпускают пальцы.
+        modifiers.asReversed().forEach { robot.keyRelease(it) }
+        delay(KEY_SETTLE_MS)
+    }.onFailure { System.err.println("не получилось нажать «$chord»: $it") }
+}
+
+/** Клавиши без знака: по имени, а не по коду — имена читаются в командной строке. */
+private val NAMED_KEYS = mapOf(
+    "enter" to AwtKeyEvent.VK_ENTER,
+    "tab" to AwtKeyEvent.VK_TAB,
+    "escape" to AwtKeyEvent.VK_ESCAPE,
+    "esc" to AwtKeyEvent.VK_ESCAPE,
+    "end" to AwtKeyEvent.VK_END,
+    "home" to AwtKeyEvent.VK_HOME,
+    "down" to AwtKeyEvent.VK_DOWN,
+    "up" to AwtKeyEvent.VK_UP,
+    "left" to AwtKeyEvent.VK_LEFT,
+    "right" to AwtKeyEvent.VK_RIGHT,
+    "backspace" to AwtKeyEvent.VK_BACK_SPACE,
+    "space" to AwtKeyEvent.VK_SPACE,
+)
+
+/** Пауза по «wait» в -Deide.press. */
+private const val WAIT_MS = 3_000L
+
+/** Пауза между нажатиями: интерфейс должен успеть перерисоваться. */
+private const val KEY_SETTLE_MS = 120L
+
+private const val DRAG_STEP_MS = 8L
+private const val DRAG_SETTLE_MS = 300L
+
+private fun captureScreen(target: File) {
+    runCatching {
+        val screen = Toolkit.getDefaultToolkit().screenSize
+        val image = Robot().createScreenCapture(Rectangle(0, 0, screen.width, screen.height))
+        ImageIO.write(image, "png", target)
+        println("снимок экрана: ${target.absolutePath}")
+    }.onFailure {
+        System.err.println("снимок не получился: $it")
+    }
+}
+
+@Composable
+private fun Tab(title: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(if (selected) Eide.colors.accent else Eide.colors.panel)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        BasicText(
+            title,
+            style = TextStyle(
+                color = if (selected) Color.White else Eide.colors.textDim,
+                fontSize = 12.sp,
+            ),
+        )
+    }
+}
