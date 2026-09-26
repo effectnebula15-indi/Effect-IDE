@@ -1,5 +1,5 @@
 plugins {
-    id("eide.kotlin-jvm")
+    id("eide.android-jvm")
 }
 
 dependencies {

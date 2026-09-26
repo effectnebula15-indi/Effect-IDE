@@ -15,7 +15,11 @@ kotlin {
     jvmToolchain(21)
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
-        // Не даёт случайно позвать метод, которого нет в Java 17 (а значит и на Android).
+        // Не даёт позвать API новее Java 17. От отсутствующего на Android это
+        // НЕ защищает: `ProcessHandle` в Java 17 есть, а на Android нет вовсе.
+        // Прежняя редакция этого комментария утверждала обратное — и с этой
+        // уверенностью `ProcessHandle` попал в клиент LSP. Защита от
+        // Android-чужого API — конвенция eide.android-jvm.
         freeCompilerArgs.add("-Xjdk-release=17")
         extraWarnings.set(true)
     }
